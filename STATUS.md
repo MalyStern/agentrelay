@@ -14,7 +14,8 @@ Legend: component — state — notes.
 | Kill-test A (engine can replace a tool result?) | ⬜ | Needs a live Claude engine; the `transformToolResult` capability flag is wired in the contract. |
 | Kill-test B (detect rate-limit + clean resume on a real session) | ⬜ | Replayable once recorded; live recording pending. |
 | Kill-test C (kill-tree catches Docker/WSL children, 3 OSes) | ⬜ | Process Manager work; OS-level, needs the daemon. |
-| SQLite hybrid schema (append-log + state-tables) | 🟨 | DDL specified in plan 02 §ה; to be laid down as migrations. |
+| SQLite hybrid schema (append-log + state-tables) | ✅ | `runner/src/store`. Full DDL (00 §4 + 02 new tables), typed Store over `node:sqlite` (events/transitions/missions/work_units/checkpoints), `payload_ver`, no hash-chain. Tested in-memory. |
+| Claude stream-json → AgentEvent parser | ✅ | `runner/src/providers/claude`. Buffered NDJSON reader, session-id + done tracking. |
 | CLI skeleton | ⬜ | |
 | no-hardcoded-strings lint + pseudo-loc | ⬜ | i18n foundation. |
 
@@ -38,4 +39,4 @@ Legend: component — state — notes.
 
 ## Verification snapshot
 
-- `runner`: 30 tests passing (contracts + fake + record/replay + guard-eval + quota), `tsc --noEmit` clean, 0 npm vulnerabilities.
+- `runner`: 46 tests passing (contracts · fake · record/replay · guard-eval · quota · claude-stream · store), `tsc --noEmit` clean, 0 npm vulnerabilities.
