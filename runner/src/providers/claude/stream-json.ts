@@ -126,4 +126,23 @@ export class ClaudeStreamParser {
     }
     return events
   }
+
+  /** Parse any remaining buffered line at stream end. Call on process close — a
+   * final `result` line may arrive without a trailing newline, and losing it would
+   * drop the turn's completion + session id. */
+  flush(): AgentEvent[] {
+    const line = this.buffer.trim()
+    this.buffer = ''
+    if (!line) return []
+    let obj: unknown
+    try {
+      obj = JSON.parse(line)
+    } catch {
+      return []
+    }
+    const r = parseClaudeLine(obj)
+    if (r.sessionId) this._sessionId = r.sessionId
+    if (r.done) this._done = true
+    return r.events
+  }
 }

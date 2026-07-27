@@ -66,9 +66,14 @@ export function evaluateSendGate(prompt: ScheduledPrompt, ctx: SendContext): Sen
   if (prompt.status === 'expired') return 'expired'
   if (prompt.status === 'sent') return 'already_sent'
 
-  if (prompt.validUntil && ms(ctx.nowUtc) > ms(prompt.validUntil)) return 'expired'
-  // The mission's contract advanced since this prompt was queued → it's stale.
-  if (prompt.missionVer < ctx.currentMissionVer) return 'superseded'
+  if (prompt.validUntil !== undefined) {
+    const vu = ms(prompt.validUntil)
+    // A malformed valid_until fails CLOSED (treated as expired), never as sendable.
+    if (!Number.isFinite(vu) || ms(ctx.nowUtc) > vu) return 'expired'
+  }
+  // The mission's contract advanced since this prompt was queued → it's stale. A
+  // non-finite missionVer also fails closed.
+  if (!Number.isFinite(prompt.missionVer) || prompt.missionVer < ctx.currentMissionVer) return 'superseded'
   if (!isTriggerDue(prompt.trigger, ctx)) return 'not_due'
   if (prompt.condition !== undefined && ctx.conditionResult === false) return 'condition_unmet'
   return 'send'

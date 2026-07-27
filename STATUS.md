@@ -38,6 +38,17 @@ Legend: component — state — notes.
 
 ⬜ Watchtower 3-layer + guard table · Isolation-Ring · VCS/CI loop · cost-ledger · Codex adapter · ACP generic · Relay Orchestrator · Cloud-delegated · full 23-language i18n · research track (parallelism/merge-queue).
 
+## QA pass (adversarial review, 2026-07-27)
+
+An adversarial review of the whole `runner` found — and this commit fixes — 2 critical + 5 lesser issues, each with a regression test:
+- **CRIT** path-traversal defeated the containment guards (`..` wasn't normalized) → added `normPath`; workspace/allowed/forbid path guards now resolve `.`/`..` first.
+- **CRIT** the first-turn "read-only" guard blocked `Write`/`Edit` but not shell writes/`git push`/network → new `read_only` guard with an inspection-only command allowlist.
+- **HIGH** command classifiers missed `git -C … push`, `kubectl --context … apply`, `$(curl …)` → tightened to match the invoked binary anywhere on the line.
+- **HIGH** `planResumeAfterRateLimit`/`sessionVerifyDeadline` threw `RangeError` on a malformed provider `resetAt` → NaN-safe with a documented fallback reset.
+- **MED** stream parser dropped a newline-less final `result` line → added `flush()`.
+- **MED** send-gate could `send` an expired/stale prompt on a `NaN` `validUntil`/`missionVer` → now fails closed.
+- **LOW** `forbid_cmd` with an invalid regex threw → fails closed (blocks).
+
 ## Verification snapshot
 
-- `runner`: 55 tests passing (contracts · fake · record/replay · guard-eval · quota · claude-stream · store · send-gate), `tsc --noEmit` clean, 0 npm vulnerabilities.
+- `runner`: 71 tests passing (contracts · fake · record/replay · guard-eval · quota · claude-stream · store · send-gate · qa-fixes regressions), `tsc --noEmit` clean, 0 npm vulnerabilities. CI green on win/mac/linux × node 22/24.

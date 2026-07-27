@@ -25,7 +25,8 @@ export type QuotaSignal =
 export function interpretEvent(event: AgentEvent): QuotaSignal {
   if (event.type === 'token_usage' || event.type === 'turn_completed') {
     const u = event.usage
-    return { kind: 'usage', used: u.totalTokens ?? u.inputTokens + u.outputTokens }
+    const used = u.totalTokens ?? u.inputTokens + u.outputTokens
+    return { kind: 'usage', used: Number.isFinite(used) ? used : 0 }
   }
   if (event.type === 'rate_limited') {
     return { kind: 'rate_limited', resetAtUtc: event.resetAt, window: event.window ?? '5h' }
@@ -35,6 +36,10 @@ export function interpretEvent(event: AgentEvent): QuotaSignal {
 
 const ms = (iso: string): number => new Date(iso).getTime()
 const iso = (t: number): string => new Date(t).toISOString()
+
+/** Fallback reset when the provider gives no / a malformed resetAt (a rate-limit is
+ * still real even if its reset time is missing — we must not crash the planner). */
+export const DEFAULT_RESET_MS = 5 * 60 * 60 * 1000 // 5h
 
 export interface ResumePlan {
   /** When to resume — the provider's reset plus a safety buffer. */
@@ -52,11 +57,14 @@ export interface ResumePlan {
 export function planResumeAfterRateLimit(
   resetAtUtc: string,
   nowUtc: string,
-  opts: { bufferMs?: number } = {},
+  opts: { bufferMs?: number; fallbackMs?: number } = {},
 ): ResumePlan {
   const bufferMs = opts.bufferMs ?? 60_000
-  const resumeAt = ms(resetAtUtc) + bufferMs
-  const waitMs = Math.max(0, resumeAt - ms(nowUtc))
+  const now = Number.isFinite(ms(nowUtc)) ? ms(nowUtc) : 0
+  // Trust the provider's reset, but never crash on a missing/malformed one.
+  const reset = Number.isFinite(ms(resetAtUtc)) ? ms(resetAtUtc) : now + (opts.fallbackMs ?? DEFAULT_RESET_MS)
+  const resumeAt = reset + bufferMs
+  const waitMs = Math.max(0, resumeAt - now)
   return { resumeAtUtc: iso(resumeAt), waitMs, bufferMs }
 }
 
@@ -69,11 +77,13 @@ export function planResumeAfterRateLimit(
 export function sessionVerifyDeadline(
   resetAtUtc: string,
   nowUtc: string,
-  opts: { leadMs?: number } = {},
+  opts: { leadMs?: number; fallbackMs?: number } = {},
 ): { verifyByUtc: string; verifyNow: boolean } {
   const leadMs = opts.leadMs ?? 5 * 60_000
-  const verifyBy = ms(resetAtUtc) - leadMs
-  return { verifyByUtc: iso(verifyBy), verifyNow: verifyBy <= ms(nowUtc) }
+  const now = Number.isFinite(ms(nowUtc)) ? ms(nowUtc) : 0
+  const reset = Number.isFinite(ms(resetAtUtc)) ? ms(resetAtUtc) : now + (opts.fallbackMs ?? DEFAULT_RESET_MS)
+  const verifyBy = reset - leadMs
+  return { verifyByUtc: iso(verifyBy), verifyNow: verifyBy <= now }
 }
 
 /**
@@ -82,7 +92,7 @@ export function sessionVerifyDeadline(
  * write while still allowing inspection commands (git status, cat, tests).
  */
 export function firstTurnReadOnlyGuards(): Guard[] {
-  return [{ kind: 'forbid_path', spec: '**' }]
+  return [{ kind: 'read_only' }]
 }
 
 /** The TurnInput flag the adapter/guard layer keys the read-only turn off. */
@@ -100,7 +110,7 @@ export class QuotaTracker {
     if (!sig) return null
     if (sig.kind === 'usage') {
       const w = this.windows.get('5h') ?? { kind: '5h' as const, provenance: 'measured' as Provenance }
-      w.used = (w.used ?? 0) + sig.used
+      w.used = (w.used ?? 0) + (Number.isFinite(sig.used) ? sig.used : 0)
       this.windows.set('5h', w)
     } else {
       this.windows.set(sig.window, {

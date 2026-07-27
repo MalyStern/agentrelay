@@ -78,6 +78,7 @@ export type GuardKind =
   | 'no_net'
   | 'no_dependency'
   | 'workspace_boundary'
+  | 'read_only'
   | 'allow_only_branch'
   | 'max_files'
   | 'max_cost'

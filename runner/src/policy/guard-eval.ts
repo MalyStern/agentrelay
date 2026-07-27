@@ -49,13 +49,61 @@ export function globToRegExp(glob: string): RegExp {
 
 const toPosix = (p: string): string => p.replace(/\\/g, '/')
 
-// ── command classifiers (deterministic, conservative) ──────────────────────────
+/** Resolve `.`/`..` and collapse slashes WITHOUT touching the filesystem, so `..`
+ * traversal can't defeat the containment guards. Returns whether it's absolute and
+ * whether a relative path escaped above its base (`up > 0`). */
+export function normPath(input: string): { absolute: boolean; escapes: boolean; path: string } {
+  let p = toPosix(input)
+  const driveMatch = /^([a-zA-Z]):\//.exec(p)
+  const drive = driveMatch ? driveMatch[1]!.toLowerCase() + ':' : ''
+  if (drive) p = p.slice(drive.length)
+  const absolute = drive !== '' || p.startsWith('/')
+  const segs = p.split('/').filter((s) => s !== '' && s !== '.')
+  const out: string[] = []
+  let up = 0
+  for (const s of segs) {
+    if (s === '..') {
+      if (out.length) out.pop()
+      else if (!absolute) up++ // a relative path climbing above its base
+      // absolute: `..` at root is a no-op (can't escape root)
+    } else out.push(s)
+  }
+  const prefix = drive ? drive + '/' : absolute ? '/' : ''
+  return { absolute, escapes: up > 0, path: prefix + '../'.repeat(up) + out.join('/') }
+}
+
+// ── command classifiers (deterministic, conservative; match the invoked binary
+//    anywhere on the line so `git -C x push` / `kubectl --context p apply` are caught)
 const RE = {
-  push: /\bgit\s+push\b/i,
-  deploy: /\b(?:deploy|vercel|netlify|flyctl|fly\s+deploy|serverless\s+deploy|kubectl\s+apply|terraform\s+apply|gcloud\s+.*deploy|eb\s+deploy|heroku\s+.*(?:push|deploy))\b/i,
-  network: /(?:^|\s|;|&&|\|)(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)\b/i,
+  push: /\bgit\b(?:\s+\S+)*\s+push\b/i,
+  deploy: /\b(?:vercel|netlify|flyctl|serverless)\b|\bfly\s+deploy\b|\bkubectl\b(?:\s+\S+)*\s+apply\b|\bterraform\b(?:\s+\S+)*\s+apply\b|\bgcloud\b[^\n]*\bdeploy\b|\beb\s+deploy\b|\bheroku\b[^\n]*(?:push|deploy)\b|\bansible-playbook\b/i,
+  // separators now include ( , backtick and $ so $(curl …) / `curl …` are caught
+  network: /(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)\b/i,
   dependency:
     /\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|i)\b|\bpip3?\s+install\b|\bcargo\s+add\b|\bgo\s+get\b|\bgem\s+install\b|\bpoetry\s+add\b|\buv\s+add\b/i,
+}
+
+// ── read-only command allowlist (for the first-turn read-only guard) ────────────
+const READONLY_BINS = new Set([
+  'ls', 'cat', 'head', 'tail', 'pwd', 'echo', 'printf', 'grep', 'egrep', 'rg', 'wc',
+  'stat', 'file', 'which', 'type', 'env', 'printenv', 'date', 'whoami', 'uname', 'true',
+  'basename', 'dirname', 'realpath', 'sort', 'uniq', 'cut', 'diff', 'tree', 'du', 'df',
+])
+const GIT_READONLY = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'ls-files', 'remote', 'describe', 'blame', 'cat-file', 'config', 'tag', 'stash'])
+
+/** True only if EVERY sub-command is a pure inspection with no output/side effect. */
+export function isReadOnlyCommand(command: string): boolean {
+  if (/[>]/.test(command)) return false // any redirection writes
+  const parts = command.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean)
+  if (parts.length === 0) return false
+  return parts.every((part) => {
+    const toks = part.split(/\s+/)
+    const bin = (toks[0] ?? '').replace(/^.*\//, '') // strip any path prefix
+    if (bin === 'git') return toks[1] !== undefined && GIT_READONLY.has(toks[1]!) && !/\b(?:-i|--interactive)\b/.test(part)
+    if (bin === 'find') return !/-(?:delete|exec|execdir|fprint|fprintf)\b/.test(part)
+    if (bin === 'sed') return !/\s-i\b/.test(part) // sed -i mutates
+    return READONLY_BINS.has(bin)
+  })
 }
 
 /**
@@ -85,16 +133,24 @@ export function deriveActions(event: Extract<AgentEvent, { type: 'tool_pre' }>):
   return []
 }
 
-/** Is a write path inside the workspace root? */
+/** Is a write path inside the workspace root — AFTER resolving `.`/`..`? */
 function insideWorkspace(path: string, cwd: string): boolean {
-  const p = toPosix(path)
-  const root = toPosix(cwd).replace(/\/+$/, '')
-  if (p.startsWith('/') || /^[a-zA-Z]:\//.test(p)) {
-    // absolute — must be under root
-    return p === root || p.startsWith(root + '/')
-  }
-  // relative — reject parent-escapes
-  return !p.split('/').includes('..')
+  const t = normPath(path)
+  if (t.escapes) return false // relative path climbed above the workspace
+  if (!t.absolute) return true // relative, no escape → inside
+  const root = normPath(cwd).path.replace(/\/+$/, '')
+  return t.path === root || t.path.startsWith(root + '/')
+}
+
+/** The path a relative/absolute write resolves to, expressed for glob matching:
+ * workspace-relative when inside, else the normalized absolute path. */
+function pathForGlob(path: string, cwd: string): string {
+  const t = normPath(path)
+  if (!t.absolute) return t.path // already relative (may carry ../ if it escaped)
+  const root = normPath(cwd).path.replace(/\/+$/, '')
+  if (t.path === root) return ''
+  if (t.path.startsWith(root + '/')) return t.path.slice(root.length + 1)
+  return t.path
 }
 
 function checkAction(action: ProposedAction, guard: Guard, cwd: string): GuardViolation | null {
@@ -117,19 +173,34 @@ function checkAction(action: ProposedAction, guard: Guard, cwd: string): GuardVi
       return action.kind === 'command' && RE.dependency.test(action.command) ? v() : null
     case 'forbid_cmd': {
       const pat = typeof guard.spec === 'string' ? guard.spec : undefined
-      if (action.kind === 'command' && pat && new RegExp(pat, 'i').test(action.command)) return v(pat)
-      return null
+      if (action.kind !== 'command' || !pat) return null
+      let re: RegExp
+      try {
+        re = new RegExp(pat, 'i')
+      } catch {
+        // An uncompilable policy spec fails CLOSED — block, don't ignore.
+        return v(`invalid forbid_cmd pattern: ${pat}`)
+      }
+      return re.test(action.command) ? v(pat) : null
     }
+    case 'read_only':
+      // First-turn read-only (fix #5): block writes, network, and any command that
+      // isn't a pure inspection — a prompt can't be trusted to stay read-only.
+      if (action.kind === 'write' || action.kind === 'network') return v()
+      if (action.kind === 'command') return isReadOnlyCommand(action.command) ? null : v(action.command)
+      return null
     case 'workspace_boundary':
       return action.kind === 'write' && !insideWorkspace(action.path, cwd) ? v(action.path) : null
     case 'forbid_path': {
       const globs = asGlobs(guard.spec)
-      return action.kind === 'write' && globs.some((g) => globToRegExp(g).test(toPosix(action.path))) ? v(action.path) : null
+      const rel = action.kind === 'write' ? pathForGlob(action.path, cwd) : ''
+      return action.kind === 'write' && globs.some((g) => globToRegExp(g).test(rel)) ? v(action.path) : null
     }
     case 'allowed_paths': {
       const globs = asGlobs(guard.spec)
       if (action.kind !== 'write' || globs.length === 0) return null
-      const allowed = globs.some((g) => globToRegExp(g).test(toPosix(action.path)))
+      const rel = pathForGlob(action.path, cwd)
+      const allowed = globs.some((g) => globToRegExp(g).test(rel))
       return allowed ? null : v(action.path)
     }
     // Stateful / branch guards are enforced by the daemon with counters/VCS, not per-action here.
