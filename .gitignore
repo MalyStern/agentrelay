@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+coverage/
+# Rust (when the daemon is built)
+target/
+# local runtime state
+*.sqlite
+*.sqlite-*
+.agentrelay/

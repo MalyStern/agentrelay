@@ -1,0 +1,21 @@
+{
+  "name": "@agentrelay/runner",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AgentRelay agent-side runners + normalized contracts + Phase-0 test harness (record/replay). The Rust daemon spawns and talks to these.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}
