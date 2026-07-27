@@ -4,3 +4,4 @@ export type { FakeOptions, ResumeBehavior } from './providers/fake/fake-adapter.
 export * from './testing/record-replay.js'
 export * from './policy/guard-eval.js'
 export * from './quota/quota-manager.js'
+export * from './providers/claude/stream-json.js'
