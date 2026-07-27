@@ -22,9 +22,10 @@ Legend: component — state — notes.
 
 | Component | State | Notes |
 |---|---|---|
-| Claude adapter (Agent SDK + Hooks) | 🟨 | Contract + fake in place; Node SDK runner next. |
+| Claude adapter (Agent SDK + Hooks) | 🟨 | Contract + fake in place; stream-json parser next. |
+| Watchtower layer-1 guard evaluator (PreToolUse brain, §ז.4) | ✅ | `runner/src/policy`. no_push/deploy/net/dependency, workspace-boundary, allowed/forbid paths+cmds. Deterministic, reason-codes. |
 | Process Manager (pgid/Job-Object, external_resources, reconcile-before-stop) | ⬜ | Rust/OS; scaffold in daemon. |
-| Quota Manager (reactive, small units, checkpoint, first-turn read-only guard) | ⬜ | Logic prototypable in TS against the fake adapter. |
+| Quota Manager (reactive, resume plan, session-verify-before-window, first-turn read-only) | ✅ | `runner/src/quota`. Pure decision core + tracker. Integration-tested with the rate-limit fixture end-to-end. |
 | Credential Broker (keyring + GitHub-App) + redaction | ⬜ | |
 | Keep-awake (ES_CONTINUOUS…) | ⬜ | OS; scaffold. |
 | Context-Optimizer core (File-Receipts, Output-Compressor, Context-Health=Estimated) | ⬜ | Runs in the Node engine (SDK transform / updatedToolOutput). |
@@ -37,4 +38,4 @@ Legend: component — state — notes.
 
 ## Verification snapshot
 
-- `runner`: 11 tests passing, `tsc --noEmit` clean, 0 npm vulnerabilities.
+- `runner`: 30 tests passing (contracts + fake + record/replay + guard-eval + quota), `tsc --noEmit` clean, 0 npm vulnerabilities.
