@@ -31,7 +31,8 @@ Legend: component — state — notes.
 | Keep-awake (ES_CONTINUOUS…) | ⬜ | OS; scaffold. |
 | Context-Optimizer core (File-Receipts, Output-Compressor, Context-Health=Estimated) | ⬜ | Runs in the Node engine (SDK transform / updatedToolOutput). |
 | ntfy / Telegram operational push | ⬜ | TS-implementable + testable. |
-| Timeline (bidi-isolation) + Scheduler + morning report | ⬜ | |
+| Scheduler send-gate (stale-proof queue, §10) | ✅ | `runner/src/scheduler`. at/after/on_event/cron triggers, expiry, mission-version supersede, condition gate, priority select. Pure + tested. |
+| Timeline (bidi-isolation) + morning report | ⬜ | |
 
 ## Phases 2–4
 
@@ -39,4 +40,4 @@ Legend: component — state — notes.
 
 ## Verification snapshot
 
-- `runner`: 46 tests passing (contracts · fake · record/replay · guard-eval · quota · claude-stream · store), `tsc --noEmit` clean, 0 npm vulnerabilities.
+- `runner`: 55 tests passing (contracts · fake · record/replay · guard-eval · quota · claude-stream · store · send-gate), `tsc --noEmit` clean, 0 npm vulnerabilities.
