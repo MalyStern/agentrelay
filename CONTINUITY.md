@@ -53,7 +53,8 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 4. ~~Claude stream-json parser~~ ✅ DONE as `daemon/src/claude_stream.rs` (8 tests).
 5. ~~Async ProviderAdapter trait + fake adapter~~ ✅ DONE (adapter.rs + fake_adapter.rs, 4 async tests; tokio/futures/async-stream).
 6. ~~Real Claude subprocess adapter~~ ✅ DONE (claude_adapter.rs: spawn_stream_json + ClaudeAdapter; 3 tests incl. a real node-subprocess integration test).
-7. **MissionRunner** (mission.rs) — drive an adapter through a turn, apply guards to tool_pre events, track quota via QuotaTracker, on rate_limited produce a resume plan. Ties adapter+guard+quota+store together; test with the fake adapter. Then Process Manager (Windows Job Objects). NEXT.
+7. ~~MissionRunner (mission.rs)~~ ✅ DONE (3 tests: clean turn logs+accumulates, guard violation interrupts, rate-limit -> resume plan). Ties adapter+guard+quota+store.
+8. **Process Manager** (Windows Job Objects via `windows` crate / Unix pgid) — real process-tree kill + external_resources reconcile-before-stop. Then Credential Broker (`keyring`), keep-awake, then the daemon binary + IPC. NEXT.
 
 4. Then: the async `ProviderAdapter` trait (add tokio/async-trait), the Claude adapter (spawn `claude -p`, parse stream-json → port `stream-json.ts`), the Process Manager (Job Objects on Windows via the `windows` crate), Credential Broker (`keyring` crate).
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
@@ -62,5 +63,5 @@ Update this "NEXT STEP" after each increment.
 
 ## Done log (most recent first)
 
-- 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess spawn->parse->stream works. Store=bundled rusqlite; async=tokio.
+- 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
 - 2026-07-27: runner (TS) Phase 0 + core Phase 1 + full QA pass, 71 tests. See STATUS.md.
