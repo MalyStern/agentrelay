@@ -52,7 +52,8 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 3. ~~`daemon/src/store.rs`~~ ✅ DONE (6 tests, bundled rusqlite).
 4. ~~Claude stream-json parser~~ ✅ DONE as `daemon/src/claude_stream.rs` (8 tests).
 5. ~~Async ProviderAdapter trait + fake adapter~~ ✅ DONE (adapter.rs + fake_adapter.rs, 4 async tests; tokio/futures/async-stream).
-6. **Real Claude subprocess adapter** — spawn `claude -p --output-format stream-json`, pipe stdout through ClaudeStreamParser into an EventStream. Make the command injectable so it is testable with a stub emitter (no real claude needed). Then Process Manager (Windows Job Objects via `windows` crate). NEXT.
+6. ~~Real Claude subprocess adapter~~ ✅ DONE (claude_adapter.rs: spawn_stream_json + ClaudeAdapter; 3 tests incl. a real node-subprocess integration test).
+7. **MissionRunner** (mission.rs) — drive an adapter through a turn, apply guards to tool_pre events, track quota via QuotaTracker, on rate_limited produce a resume plan. Ties adapter+guard+quota+store together; test with the fake adapter. Then Process Manager (Windows Job Objects). NEXT.
 
 4. Then: the async `ProviderAdapter` trait (add tokio/async-trait), the Claude adapter (spawn `claude -p`, parse stream-json → port `stream-json.ts`), the Process Manager (Job Objects on Windows via the `windows` crate), Credential Broker (`keyring` crate).
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
@@ -61,5 +62,5 @@ Update this "NEXT STEP" after each increment.
 
 ## Done log (most recent first)
 
-- 2026-07-28: Rust daemon — events/provider/error/guard/quota/send_gate/store all ported + tested (41 cargo tests: +claude_stream +async ProviderAdapter trait +fake adapter). Store uses bundled rusqlite; async via tokio.
+- 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess spawn->parse->stream works. Store=bundled rusqlite; async=tokio.
 - 2026-07-27: runner (TS) Phase 0 + core Phase 1 + full QA pass, 71 tests. See STATUS.md.

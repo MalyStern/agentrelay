@@ -6,6 +6,7 @@
 //! production implementation (tested here). See `docs/adr/0001-*`.
 
 pub mod adapter;
+pub mod claude_adapter;
 pub mod claude_stream;
 pub mod fake_adapter;
 pub mod error;
