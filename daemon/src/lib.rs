@@ -1,0 +1,15 @@
+//! AgentRelay daemon core.
+//!
+//! This crate is the Rust source of truth for the orchestration logic. Where a
+//! module has a `runner/src/**` counterpart in TypeScript, the two are kept in
+//! lockstep: the TS version is the executable spec (tested there), and this is the
+//! production implementation (tested here). See `docs/adr/0001-*`.
+
+pub mod error;
+pub mod events;
+pub mod guard;
+pub mod provider;
+
+pub use error::{AgentRelayError, ErrorCode, Result};
+pub use events::{AgentEvent, EnvelopedEvent, Provenance, QuotaWindow, Usage};
+pub use provider::{Capabilities, Guard, GuardKind, QuotaState, QuotaWindowState};
