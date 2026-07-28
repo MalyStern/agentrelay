@@ -71,3 +71,31 @@ impl Guard {
         }
     }
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionSpec {
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_external_id: Option<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub guards: Vec<Guard>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionHandle {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    pub provider: String,
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurnInput {
+    pub prompt: String,
+    /// First turn after a resume MUST be read-only (fix #5) — enforced by a guard.
+    #[serde(default)]
+    pub read_only: bool,
+}
