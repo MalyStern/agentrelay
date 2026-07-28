@@ -47,8 +47,8 @@ cd runner ; npm test ; npm run typecheck
 ## NEXT STEP
 
 Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at a time, each with tests:
-1. **`daemon/src/quota.rs`** ← `runner/src/quota/quota-manager.ts` — plan_resume_after_rate_limit (NaN-safe fallback), session_verify_deadline, interpret_event, first_turn_read_only_guards → `[Guard::new(ReadOnly)]`, QuotaTracker. Use chrono for ISO parsing (Err = invalid → fallback).
-2. **`daemon/src/send_gate.rs`** ← `runner/src/scheduler/send-gate.ts` — evaluate_send_gate (fail-closed on unparsable dates/version), is_trigger_due, select_next_to_send.
+1. ~~`daemon/src/quota.rs`~~ ✅ DONE (7 tests).
+2. **`daemon/src/send_gate.rs`** ← `runner/src/scheduler/send-gate.ts` — evaluate_send_gate (fail-closed on unparsable dates/version), is_trigger_due, select_next_to_send. NEXT.
 3. **`daemon/src/store.rs`** — port the SQLite hybrid store using `rusqlite` (add dep). Mirror `runner/src/store`.
 4. Then: the async `ProviderAdapter` trait (add tokio/async-trait), the Claude adapter (spawn `claude -p`, parse stream-json → port `stream-json.ts`), the Process Manager (Job Objects on Windows via the `windows` crate), Credential Broker (`keyring` crate).
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.

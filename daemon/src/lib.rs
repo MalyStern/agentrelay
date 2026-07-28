@@ -9,6 +9,7 @@ pub mod error;
 pub mod events;
 pub mod guard;
 pub mod provider;
+pub mod quota;
 
 pub use error::{AgentRelayError, ErrorCode, Result};
 pub use events::{AgentEvent, EnvelopedEvent, Provenance, QuotaWindow, Usage};
