@@ -32,11 +32,13 @@ function Have([string]$cmd) {
 
 function Install-Pkg([string]$id, [string]$name, [string[]]$extra) {
   Write-Host "==> Installing $name ($id)..." -ForegroundColor Cyan
+  # --source winget: skip the 'msstore' source, which fails TLS on this network
+  # (0x8a15005e cert mismatch). The community 'winget' source works.
   try {
     if ($extra) {
-      winget install --id $id --exact --accept-source-agreements --accept-package-agreements --silent @extra
+      winget install --id $id --exact --source winget --accept-source-agreements --accept-package-agreements --silent @extra
     } else {
-      winget install --id $id --exact --accept-source-agreements --accept-package-agreements --silent
+      winget install --id $id --exact --source winget --accept-source-agreements --accept-package-agreements --silent
     }
   } catch {
     Write-Host "    winget note: $($_.Exception.Message) (continuing)" -ForegroundColor DarkYellow
