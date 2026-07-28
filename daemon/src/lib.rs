@@ -11,6 +11,7 @@ pub mod guard;
 pub mod provider;
 pub mod quota;
 pub mod send_gate;
+pub mod store;
 
 pub use error::{AgentRelayError, ErrorCode, Result};
 pub use events::{AgentEvent, EnvelopedEvent, Provenance, QuotaWindow, Usage};
