@@ -14,6 +14,7 @@ pub mod daemon;
 pub mod error;
 pub mod events;
 pub mod guard;
+pub mod ipc;
 pub mod keepawake;
 pub mod mission;
 pub mod process;

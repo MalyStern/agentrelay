@@ -12,7 +12,7 @@ use crate::quota::{plan_resume_after_rate_limit, QuotaTracker, ResumePlan};
 use crate::store::{AppendEvent, Store};
 use futures::StreamExt;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct TurnOutcome {
     /// Number of normalized events observed.
     pub events_seen: usize,

@@ -98,9 +98,12 @@ pub struct CheckpointRow {
     pub summary: Option<String>,
 }
 
+/// The connection is wrapped in a Mutex so `Store` is `Sync` — the daemon is shared
+/// across concurrent IPC connections, and rusqlite's `Connection` is `!Sync`. Locks
+/// are held only for the duration of one query.
 pub struct Store {
-    conn: Connection,
-    clock: Box<dyn Fn() -> String + Send>,
+    conn: std::sync::Mutex<Connection>,
+    clock: Box<dyn Fn() -> String + Send + Sync>,
 }
 
 fn now_iso() -> String {
@@ -116,15 +119,19 @@ impl Store {
         Self::with_clock(Connection::open(path)?, Box::new(now_iso))
     }
 
-    pub fn with_clock(conn: Connection, clock: Box<dyn Fn() -> String + Send>) -> rusqlite::Result<Self> {
-        let store = Store { conn, clock };
+    pub fn with_clock(conn: Connection, clock: Box<dyn Fn() -> String + Send + Sync>) -> rusqlite::Result<Self> {
+        let store = Store {
+            conn: std::sync::Mutex::new(conn),
+            clock,
+        };
         store.migrate()?;
         Ok(store)
     }
 
     fn migrate(&self) -> rusqlite::Result<()> {
-        self.conn.execute_batch(SCHEMA)?;
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(SCHEMA)?;
+        conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
             params![SCHEMA_VERSION.to_string()],
         )?;
@@ -133,6 +140,8 @@ impl Store {
 
     pub fn schema_version(&self) -> i64 {
         self.conn
+            .lock()
+            .unwrap()
             .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
                 r.get::<_, String>(0)
             })
@@ -143,7 +152,8 @@ impl Store {
 
     // ── append-only log ──────────────────────────────────────────────────────
     pub fn append_event(&self, e: &AppendEvent) -> rusqlite::Result<i64> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO events(mission_id, ts_utc, actor, kind, payload, seq_in_turn, payload_ver)
              VALUES (?1,?2,?3,?4,?5,?6,1)",
             params![
@@ -155,11 +165,12 @@ impl Store {
                 e.seq_in_turn,
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn get_events(&self, mission_id: &str) -> rusqlite::Result<Vec<StoredEvent>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, mission_id, ts_utc, actor, kind, payload, seq_in_turn, payload_ver
              FROM events WHERE mission_id = ?1 ORDER BY id",
         )?;
@@ -186,7 +197,7 @@ impl Store {
         to: &str,
         reason_code: Option<&str>,
     ) -> rusqlite::Result<()> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT INTO state_transitions(mission_id, ts_utc, from_state, to_state, reason_code)
              VALUES (?1,?2,?3,?4,?5)",
             params![mission_id, (self.clock)(), from, to, reason_code],
@@ -195,9 +206,9 @@ impl Store {
     }
 
     pub fn get_transitions(&self, mission_id: &str) -> rusqlite::Result<Vec<(Option<String>, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT from_state, to_state FROM state_transitions WHERE mission_id = ?1 ORDER BY id")?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT from_state, to_state FROM state_transitions WHERE mission_id = ?1 ORDER BY id")?;
         let rows = stmt.query_map(params![mission_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect()
     }
@@ -205,7 +216,7 @@ impl Store {
     // ── state-tables ─────────────────────────────────────────────────────────
     pub fn upsert_mission(&self, m: &MissionRow) -> rusqlite::Result<()> {
         let now = (self.clock)();
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT INTO missions(id, title, contract, contract_ver, status, autonomy, created_utc, updated_utc, timezone)
              VALUES (?1,?2,?3,1,?4,?5,?6,?6,?7)
              ON CONFLICT(id) DO UPDATE SET title=excluded.title, contract=excluded.contract,
@@ -216,7 +227,7 @@ impl Store {
     }
 
     pub fn get_mission(&self, id: &str) -> rusqlite::Result<Option<MissionRow>> {
-        let r = self.conn.query_row(
+        let r = self.conn.lock().unwrap().query_row(
             "SELECT id, title, contract, status, autonomy, timezone FROM missions WHERE id = ?1",
             params![id],
             |r| {
@@ -239,11 +250,14 @@ impl Store {
     }
 
     pub fn count_missions(&self) -> rusqlite::Result<i64> {
-        self.conn.query_row("SELECT COUNT(*) FROM missions", [], |r| r.get(0))
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM missions", [], |r| r.get(0))
     }
 
     pub fn upsert_work_unit(&self, w: &WorkUnitRow) -> rusqlite::Result<()> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT INTO work_units(id, mission_id, seq, title, contract, worker, status, worktree_path)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(id) DO UPDATE SET seq=excluded.seq, title=excluded.title, contract=excluded.contract,
@@ -254,7 +268,8 @@ impl Store {
     }
 
     pub fn list_work_units(&self, mission_id: &str) -> rusqlite::Result<Vec<WorkUnitRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, mission_id, seq, title, contract, worker, status, worktree_path
              FROM work_units WHERE mission_id = ?1 ORDER BY seq",
         )?;
@@ -275,7 +290,7 @@ impl Store {
     }
 
     pub fn save_checkpoint(&self, cp: &CheckpointRow) -> rusqlite::Result<()> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT INTO checkpoints(id, mission_id, ts_utc, git_head, git_branch, summary)
              VALUES (?1,?2,?3,?4,?5,?6)",
             params![cp.id, cp.mission_id, (self.clock)(), cp.git_head, cp.git_branch, cp.summary],
@@ -284,7 +299,7 @@ impl Store {
     }
 
     pub fn latest_checkpoint(&self, mission_id: &str) -> rusqlite::Result<Option<CheckpointRow>> {
-        let r = self.conn.query_row(
+        let r = self.conn.lock().unwrap().query_row(
             "SELECT id, mission_id, git_head, git_branch, summary FROM checkpoints
              WHERE mission_id = ?1 ORDER BY ts_utc DESC, rowid DESC LIMIT 1",
             params![mission_id],

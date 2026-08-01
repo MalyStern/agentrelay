@@ -42,7 +42,7 @@ pub fn interpret_event(event: &AgentEvent) -> Option<QuotaSignal> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResumePlan {
     pub resume_at_utc: String,
     pub wait_ms: i64,

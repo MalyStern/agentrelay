@@ -3,6 +3,8 @@
 use agentrelay::daemon::Daemon;
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Parser)]
 #[command(name = "agentrelay", version, about = "Supervise overnight AI coding-agent runs — locally.")]
@@ -30,6 +32,12 @@ enum Cmd {
     },
     /// Check that the required tools are installed.
     Doctor,
+    /// Start the loopback IPC server (for a UI / remote control).
+    Serve {
+        /// Address to bind (loopback only).
+        #[arg(long, default_value = "127.0.0.1:7717")]
+        bind: String,
+    },
 }
 
 #[tokio::main]
@@ -97,6 +105,18 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             } else {
                 Err("missing a required tool (git/node)".to_string())
             }
+        }
+        Cmd::Serve { bind } => {
+            let daemon = Daemon::open(root).map_err(|e| e.to_string())?;
+            let shared = Arc::new(Mutex::new(daemon));
+            let handle = agentrelay::ipc::serve(shared, &bind).await.map_err(|e| e.to_string())?;
+            // Write addr + token so a local UI can connect (loopback only).
+            let info = format!("{{\"addr\":\"{}\",\"token\":\"{}\"}}", handle.addr, handle.token);
+            let _ = std::fs::write(root.join(".agentrelay").join("ipc.json"), &info);
+            println!("AgentRelay IPC listening on http://{}", handle.addr);
+            println!("  token written to .agentrelay/ipc.json — GET /status, POST /run, GET /health");
+            let _ = handle.task.await;
+            Ok(())
         }
     }
 }
