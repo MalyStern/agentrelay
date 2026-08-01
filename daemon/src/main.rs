@@ -39,6 +39,24 @@ enum Cmd {
         #[arg(long, default_value = "default")]
         unit: String,
     },
+    /// Finish a unit of work: run the validators and, only if they pass, checkpoint.
+    Done {
+        /// What this unit did — becomes the commit subject.
+        summary: String,
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        #[arg(long, default_value = "default")]
+        mission: String,
+        #[arg(long, default_value = "default")]
+        unit: String,
+    },
+    /// List the checkpoints the supervisor made, newest first.
+    Checkpoints {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Start the loopback IPC server (for a UI / remote control).
     Serve {
         /// Address to bind (loopback only).
@@ -129,6 +147,47 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             } else {
                 Err("validators failed — unit is NOT complete".to_string())
             }
+        }
+        Cmd::Done { summary, cwd, mission, unit } => {
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            let out = d.complete_unit(&mission, &unit, &cwd, &summary).await;
+
+            if out.validations.is_empty() {
+                println!("No validators configured (.agentrelay/config.json → validators).");
+                println!("Nothing was checkpointed: without evidence there is nothing to certify.");
+                return Err("no completion evidence — unit is NOT complete".to_string());
+            }
+            for r in &out.validations {
+                println!("  [{}] {} ({} ms)", if r.passed { "PASS" } else { "FAIL" }, r.validator, r.duration_ms);
+            }
+            if !out.gate_passed {
+                println!("\nNot checkpointed — your work is still in the working tree, uncommitted.");
+                return Err("validators failed — unit is NOT complete".to_string());
+            }
+            match (&out.checkpoint, &out.checkpoint_error) {
+                (Some(cp), _) if cp.created => {
+                    println!("\nCheckpointed {} ({} file(s)) on {}", &cp.head[..7.min(cp.head.len())], cp.files_changed, cp.branch.clone().unwrap_or_else(|| "detached HEAD".into()));
+                    println!("  Undo this unit:   {}", agentrelay::checkpoint::undo_command(&cp.head));
+                    println!("  Rewind here later: {}", agentrelay::checkpoint::rewind_command(&cp.head));
+                }
+                (Some(_), _) => println!("\nValidators passed; nothing to checkpoint (the tree was already clean)."),
+                (None, Some(e)) => println!("\nValidators passed, but the checkpoint could not be made: {e}"),
+                (None, None) => {}
+            }
+            Ok(())
+        }
+        Cmd::Checkpoints { cwd, limit } => {
+            let list = agentrelay::checkpoint::list(&cwd, limit).map_err(|e| e.to_string())?;
+            if list.is_empty() {
+                println!("No checkpoints yet — run `agentrelay done \"<what the unit did>\"`.");
+                return Ok(());
+            }
+            println!("Checkpoints (newest first):");
+            for (sha, id) in &list {
+                println!("  {}  {}", &sha[..7.min(sha.len())], id);
+            }
+            println!("\nTo see what came after one:  git diff --stat <sha> HEAD");
+            Ok(())
         }
         Cmd::Serve { bind } => {
             let daemon = Daemon::open(root).map_err(|e| e.to_string())?;

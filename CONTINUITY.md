@@ -75,6 +75,19 @@ PowerShell), JSONC comments in the CLIs, `init` commands that write a commented
 config listing every option. patchproof 32->42, repodoctor 28->38, lastgood
 23->33, daemon 65->70 tests. All pushed.
 
+CHECKPOINTS WIRED (2026-08-02): checkpoint.rs — real git commits made by the
+supervisor, authored as AgentRelay <agentrelay@localhost> with an
+`AgentRelay-Checkpoint:` trailer so resume can tell our commits from the agent's
+and the human's. Daemon::complete_unit joins the two halves: validators run, and
+the tree is committed ONLY if they all pass (no validators = not a pass). CLI:
+`agentrelay done "<summary>"` and `agentrelay checkpoints`. Never resets/cleans/
+pushes — undo is handed back as a command. Caught in the process: `git add --all`
+would have swept our own DB into the user's commits, so init now writes a
+self-ignoring .agentrelay/.gitignore that keeps only config.json. 80 cargo tests.
+
+NEXT: Context-Optimizer core (file receipts + output compression) — the piece that
+actually saves tokens; then the morning report (reads checkpoints + validations).
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

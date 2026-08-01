@@ -91,6 +91,22 @@ impl Daemon {
             std::fs::write(Self::config_path(&root), json)
                 .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
         }
+
+        // The supervisor checkpoints with `git add --all`, which would otherwise
+        // sweep our own database — machine state, holding prompts and file paths —
+        // into the user's commits. A self-ignoring directory is the fix: it needs no
+        // cooperation from the user's .gitignore and works in a repo we did not
+        // create. `!config.json` keeps the one file worth committing, so a team can
+        // share the guards and validators.
+        let ignore = Self::dir(&root).join(".gitignore");
+        if !ignore.exists() {
+            std::fs::write(
+                &ignore,
+                "# AgentRelay machine state — not yours to commit.\n*\n!.gitignore\n!config.json\n",
+            )
+            .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
+        }
+
         let store = Store::open(Self::db_path(&root).to_str().unwrap())
             .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
         Ok(Daemon { root, store, config })
@@ -198,6 +214,58 @@ impl Daemon {
         }
         results
     }
+
+    /// Complete a unit of work: run the validators, and checkpoint the tree **only
+    /// if they all passed**.
+    ///
+    /// This is the join between the two halves of the design. Checkpointing on the
+    /// agent's say-so would fill the night with commits of broken code, each one
+    /// looking like a safe point to return to; checkpointing on evidence means every
+    /// commit in the morning is a state that actually built. When the gate fails
+    /// nothing is committed — the work stays in the tree, visible and undone.
+    pub async fn complete_unit(&self, mission_id: &str, unit_id: &str, cwd: &str, summary: &str) -> UnitOutcome {
+        let validations = self.run_validators(unit_id, cwd).await;
+        let gate_passed = crate::validator::all_passed(&validations);
+
+        // No validators configured is NOT a pass — there is no evidence either way,
+        // and silently checkpointing would present an unverified state as verified.
+        if !gate_passed {
+            return UnitOutcome { validations, gate_passed, checkpoint: None, checkpoint_error: None };
+        }
+
+        match crate::checkpoint::create(cwd, unit_id, summary) {
+            Ok(cp) => {
+                if cp.created {
+                    let _ = self.store.save_checkpoint(&crate::store::CheckpointRow {
+                        id: cp.id.clone(),
+                        mission_id: Some(mission_id.to_string()),
+                        git_head: Some(cp.head.clone()),
+                        git_branch: cp.branch.clone(),
+                        summary: Some(summary.to_string()),
+                    });
+                }
+                UnitOutcome { validations, gate_passed, checkpoint: Some(cp), checkpoint_error: None }
+            }
+            // A repo we can't checkpoint (not a repo, git missing) must not be
+            // reported as a failed unit — the work passed; only the safety net is
+            // missing, and the user needs to be told which of the two happened.
+            Err(e) => UnitOutcome {
+                validations,
+                gate_passed,
+                checkpoint: None,
+                checkpoint_error: Some(e.to_string()),
+            },
+        }
+    }
+}
+
+/// The result of finishing a unit: what the evidence said, and what was recorded.
+#[derive(Debug)]
+pub struct UnitOutcome {
+    pub validations: Vec<crate::validator::ValidationResult>,
+    pub gate_passed: bool,
+    pub checkpoint: Option<crate::checkpoint::Checkpoint>,
+    pub checkpoint_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -295,6 +363,95 @@ mod tests {
         std::fs::remove_file(Daemon::config_path(&root)).unwrap();
         let d = Daemon::open(&root).unwrap();
         assert_eq!(d.config().program, Config::default().program);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A workspace whose cwd is a real git repo with one commit — what a mission
+    /// actually runs against.
+    fn tmp_repo() -> (PathBuf, String) {
+        let root = tmp();
+        std::fs::create_dir_all(&root).unwrap();
+        let p = root.to_str().unwrap().to_string();
+        let g = |args: &[&str]| {
+            std::process::Command::new("git").args(args).current_dir(&p).output().unwrap()
+        };
+        g(&["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("seed.txt"), "seed\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "base"]);
+        (root, p)
+    }
+
+    #[tokio::test]
+    async fn a_unit_is_checkpointed_only_when_the_evidence_passes() {
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "validators": [{ "kind": "tests", "command": "node --version" }] }).to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+
+        // The agent changed something and the validators pass -> committed.
+        std::fs::write(root.join("work.txt"), "the agent's output\n").unwrap();
+        let out = d.complete_unit("m1", "u1", &cwd, "unit 1: add work.txt").await;
+        assert!(out.gate_passed);
+        let cp = out.checkpoint.expect("a passing unit is checkpointed");
+        assert!(cp.created);
+        assert!(crate::checkpoint::is_ours(&cwd, &cp.head));
+        assert!(crate::checkpoint::is_clean(&cwd).unwrap());
+        // Our own database must never end up in the user's history.
+        let tracked = std::process::Command::new("git")
+            .args(["ls-files"])
+            .current_dir(&cwd)
+            .output()
+            .unwrap();
+        let tracked = String::from_utf8_lossy(&tracked.stdout);
+        assert!(tracked.contains("work.txt"), "the agent's work is committed");
+        assert!(!tracked.contains("agentrelay.db"), "our database is not: {tracked}");
+        assert_eq!(d.store().latest_checkpoint("m1").unwrap().unwrap().git_head, Some(cp.head));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_failing_gate_leaves_the_work_uncommitted() {
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "validators": [{ "kind": "tests", "command": "this-command-does-not-exist-xyz-123" }] })
+                .to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        let before = crate::checkpoint::head(&cwd).unwrap();
+
+        std::fs::write(root.join("broken.txt"), "half-finished\n").unwrap();
+        let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
+
+        assert!(!out.gate_passed);
+        assert!(out.checkpoint.is_none(), "broken work must never become a restore point");
+        assert_eq!(crate::checkpoint::head(&cwd).unwrap(), before, "HEAD must not move");
+        // The work itself is untouched — visible in the tree for the human to judge.
+        assert!(root.join("broken.txt").exists());
+        assert!(!crate::checkpoint::is_clean(&cwd).unwrap());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn no_validators_configured_is_not_a_pass() {
+        // "Nobody proved it works" and "it works" must not be the same outcome.
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        std::fs::write(root.join("work.txt"), "x\n").unwrap();
+
+        let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
+        assert!(!out.gate_passed);
+        assert!(out.checkpoint.is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
