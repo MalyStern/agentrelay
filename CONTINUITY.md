@@ -59,11 +59,13 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 10. ~~Keep-awake~~ ✅ DONE (keepawake.rs, 51 tests; ES_CONTINUOUS+ES_SYSTEM_REQUIRED).
 11. ~~Credential Broker~~ ✅ DONE (credential.rs, 54 tests) — SecretStore trait (InMemory for tests / OsKeychain via keyring for prod), CredRef (DB-safe), env_for injection, redact().
 12. ~~Daemon binary + CLI~~ ✅ DONE — daemon.rs (Daemon: config+store+keep-awake+MissionRunner) + main.rs (agentrelay CLI: init/status/run/doctor). 58 tests; CLI smoke-tested (init/status/doctor work). `run` works the moment `claude` is installed. IPC surface (loopback+token) still TODO for the UI.
-13. **NEXT options** (pick per value): (a) IPC surface (loopback HTTP+token) so a UI/remote can drive it; (b) Codex adapter (app-server JSON-RPC) — 2nd provider; (c) Watchtower layer-2 validators (run tests/typecheck as completion evidence); (d) improve the shipped CLIs (patchproof/repodoctor/lastgood). ~~(c) validators~~ ✅ DONE (validator.rs, 61 tests) — run real commands, exit code = verdict, all_passed gate (empty set = not proven). ~~(a) IPC surface~~ ✅ DONE (ipc.rs, 64 tests) — loopback HTTP+token, GET /health /status, POST /run; `agentrelay serve` writes .agentrelay/ipc.json. Store made Sync (Mutex<Connection>). Next recommend (b) Codex adapter or (d) improve the shipped CLIs.
+13. **NEXT options** (pick per value): (a) IPC surface (loopback HTTP+token) so a UI/remote can drive it; (b) Codex adapter (app-server JSON-RPC) — 2nd provider; (c) Watchtower layer-2 validators (run tests/typecheck as completion evidence); (d) improve the shipped CLIs (patchproof/repodoctor/lastgood). ~~(c) validators~~ ✅ DONE (validator.rs, 61 tests) — run real commands, exit code = verdict, all_passed gate (empty set = not proven). ~~(a) IPC surface~~ ✅ DONE (ipc.rs, 64 tests) — loopback HTTP+token, GET /health /status, POST /run; `agentrelay serve` writes .agentrelay/ipc.json. Store made Sync (Mutex<Connection>). Next recommend (b) Codex adapter (needs Codex for contract-test) or git-checkpoint. A background agent is improving the shipped CLIs.
 14. Later: Isolation-Ring (docker/bollard), VCS/CI loop, ACP generic, Tauri UI, 23-lang i18n, Cloud-delegated.
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
 
 Update this "NEXT STEP" after each increment.
+
+COMPLETION GATE WIRED (2026-08-02): validators run in the daemon (Daemon.run_validators), persist to the validations table, gate completion (all_passed); CLI `agentrelay validate`; Config.validators. Fixed: ported SCHEMA was missing the validations+quota_snapshots tables. 65 cargo tests.
 
 ## Done log (most recent first)
 

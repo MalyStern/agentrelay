@@ -3,6 +3,7 @@
 //! state-tables as the source of truth for "now". Every log row carries
 //! `payload_ver`; no hash-chain in v1.
 
+use crate::validator::ValidationResult;
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -29,6 +30,16 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   id TEXT PRIMARY KEY, mission_id TEXT, work_unit_id TEXT, ts_utc TEXT,
   git_head TEXT, git_branch TEXT, git_status TEXT, files_hash TEXT,
   last_validation TEXT, session_state TEXT, summary TEXT, payload_ver INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS validations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, work_unit_id TEXT, ts_utc TEXT, validator TEXT,
+  passed INTEGER, output TEXT, duration_ms INTEGER, payload_ver INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT, ts_utc TEXT, window_kind TEXT,
+  used REAL, limit_val REAL, reset_at_utc TEXT, raw TEXT, payload_ver INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS missions (
@@ -318,6 +329,27 @@ impl Store {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    // ── validations (Watchtower layer-2 evidence) ─────────────────────────────
+    pub fn save_validation(&self, work_unit_id: &str, r: &ValidationResult) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO validations(work_unit_id, ts_utc, validator, passed, output, duration_ms)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![work_unit_id, (self.clock)(), r.validator, r.passed as i64, r.output, r.duration_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_validations(&self, work_unit_id: &str) -> rusqlite::Result<Vec<(String, bool)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT validator, passed FROM validations WHERE work_unit_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![work_unit_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+        })?;
+        rows.collect()
     }
 }
 

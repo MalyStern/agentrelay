@@ -32,6 +32,13 @@ enum Cmd {
     },
     /// Check that the required tools are installed.
     Doctor,
+    /// Run the config's completion validators (tests/build/…) as evidence.
+    Validate {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        #[arg(long, default_value = "default")]
+        unit: String,
+    },
     /// Start the loopback IPC server (for a UI / remote control).
     Serve {
         /// Address to bind (loopback only).
@@ -104,6 +111,23 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 Ok(())
             } else {
                 Err("missing a required tool (git/node)".to_string())
+            }
+        }
+        Cmd::Validate { cwd, unit } => {
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            let results = d.run_validators(&unit, &cwd).await;
+            if results.is_empty() {
+                println!("No validators configured (.agentrelay/config.json → validators).");
+                return Ok(());
+            }
+            for r in &results {
+                println!("  [{}] {} ({} ms)", if r.passed { "PASS" } else { "FAIL" }, r.validator, r.duration_ms);
+            }
+            if agentrelay::validator::all_passed(&results) {
+                println!("All validators passed — unit complete (evidence, not the model's word).");
+                Ok(())
+            } else {
+                Err("validators failed — unit is NOT complete".to_string())
             }
         }
         Cmd::Serve { bind } => {

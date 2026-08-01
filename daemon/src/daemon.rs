@@ -31,6 +31,10 @@ pub struct Config {
     /// Keep the machine awake during a run.
     #[serde(default = "default_true")]
     pub keep_awake: bool,
+    /// Completion validators (Watchtower layer-2): a unit is done only if every one
+    /// passes. Empty = no evidence required (not recommended for autopilot).
+    #[serde(default)]
+    pub validators: Vec<crate::validator::Validator>,
 }
 
 impl Default for Config {
@@ -43,6 +47,7 @@ impl Default for Config {
                 Guard::new(crate::provider::GuardKind::WorkspaceBoundary),
             ],
             keep_awake: true,
+            validators: vec![],
         }
     }
 }
@@ -167,6 +172,17 @@ impl Daemon {
         let adapter = crate::claude_adapter::ClaudeAdapter::with_program(&self.config.program);
         self.run_turn_with(&adapter, mission_id, prompt, cwd).await
     }
+
+    /// The completion gate (Watchtower layer-2): run the config's validators in
+    /// `cwd`, persist each result, and return the results plus whether ALL passed.
+    /// A unit is "done" only on system evidence, never the model's word.
+    pub async fn run_validators(&self, work_unit_id: &str, cwd: &str) -> Vec<crate::validator::ValidationResult> {
+        let results = crate::validator::run_all(&self.config.validators, cwd).await;
+        for r in &results {
+            let _ = self.store.save_validation(work_unit_id, r);
+        }
+        results
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +240,30 @@ mod tests {
     fn open_without_init_errors() {
         let root = tmp();
         assert!(Daemon::open(&root).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_validators_gates_completion_and_persists() {
+        let root = tmp();
+        std::fs::create_dir_all(root.join(".agentrelay")).unwrap();
+        let cfg = json!({
+            "program": "claude",
+            "keep_awake": false,
+            "validators": [
+                {"kind": "tests", "command": "node --version"},
+                {"kind": "build", "command": "this-command-does-not-exist-xyz-123"}
+            ]
+        });
+        std::fs::write(root.join(".agentrelay/config.json"), cfg.to_string()).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        let results = d.run_validators("w1", ".").await;
+        assert_eq!(results.len(), 2);
+        assert!(!crate::validator::all_passed(&results)); // one failed -> unit not done
+        let saved = d.store().get_validations("w1").unwrap();
+        assert_eq!(saved.len(), 2);
+        assert!(saved.iter().any(|(v, p)| v == "tests" && *p));
+        assert!(saved.iter().any(|(v, p)| v == "build" && !*p));
         let _ = std::fs::remove_dir_all(&root);
     }
 

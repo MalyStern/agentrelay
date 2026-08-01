@@ -3,10 +3,10 @@
 //! the plan refuses to trust the agent. A validator runs a real command (tests,
 //! typecheck, build, lint, secret-scan…); its exit code is the verdict.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidatorKind {
     Tests,
@@ -30,7 +30,7 @@ impl ValidatorKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Validator {
     pub kind: ValidatorKind,
     /// The shell command to run; exit 0 = pass.
