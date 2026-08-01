@@ -259,6 +259,33 @@ impl Daemon {
     }
 }
 
+impl Daemon {
+    /// Load this mission's file receipts — what the agent already holds.
+    ///
+    /// Called on resume: after a quota reset the agent starts with an empty
+    /// conversation but the *repo* has not changed, so the expensive part (reading
+    /// the codebase again) is exactly what the receipts make unnecessary.
+    pub fn receipt_book(&self, mission_id: &str) -> crate::context::ReceiptBook {
+        let saved = self.store.get_receipts(mission_id).unwrap_or_default();
+        crate::context::ReceiptBook::with_receipts(saved)
+    }
+
+    /// Decide whether a file needs to go into context, record the decision, and
+    /// persist it so the answer survives a restart.
+    pub fn observe_read(
+        &self,
+        book: &mut crate::context::ReceiptBook,
+        mission_id: &str,
+        path: &str,
+        content: &[u8],
+        turn: u32,
+    ) -> crate::context::ReadDecision {
+        let decision = book.observe(path, content, turn);
+        let _ = self.store.save_receipt(mission_id, decision.receipt());
+        decision
+    }
+}
+
 /// The result of finishing a unit: what the evidence said, and what was recorded.
 #[derive(Debug)]
 pub struct UnitOutcome {
@@ -438,6 +465,38 @@ mod tests {
         assert!(root.join("broken.txt").exists());
         assert!(!crate::checkpoint::is_clean(&cwd).unwrap());
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn receipts_survive_a_quota_reset_so_the_repo_is_not_re_read() {
+        // The scenario this exists for: the run dies at the quota, the daemon
+        // restarts hours later with a fresh conversation, and the repo is unchanged.
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let big = vec![b'x'; 40_000];
+
+        {
+            let d = Daemon::open(&root).unwrap();
+            let mut book = d.receipt_book("m1");
+            assert!(book.is_empty(), "first run knows nothing");
+            let first = d.observe_read(&mut book, "m1", "src/big.rs", &big, 1);
+            assert!(first.should_send(), "it has to be read once");
+        }
+
+        // --- process dies here; new Daemon, new ReceiptBook ---
+        {
+            let d = Daemon::open(&root).unwrap();
+            let mut book = d.receipt_book("m1");
+            assert_eq!(book.len(), 1, "the receipt was persisted");
+            let again = d.observe_read(&mut book, "m1", "src/big.rs", &big, 1);
+            assert!(!again.should_send(), "unchanged file: 40 KB not spent again");
+            assert_eq!(book.saved_bytes, 40_000);
+
+            // And the safety property still holds across the restart.
+            let edited = d.observe_read(&mut book, "m1", "src/big.rs", b"different now", 2);
+            assert!(edited.should_send(), "a changed file is always re-sent");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

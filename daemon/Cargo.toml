@@ -24,6 +24,7 @@ async-stream = "0.3"
 keyring = "3"
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.2"
+sha2 = "0.11.0"
 
 [[bin]]
 name = "agentrelay"

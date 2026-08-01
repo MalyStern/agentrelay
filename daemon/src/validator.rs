@@ -74,16 +74,24 @@ fn truncate(s: String, max: usize) -> String {
 }
 
 async fn run_shell(command: &str, cwd: &str) -> std::io::Result<std::process::Output> {
-    use tokio::process::Command;
+    // On Windows the command must be handed to cmd.exe VERBATIM. Rust's normal
+    // argument handling quotes and escapes each arg for a C-runtime parser, which
+    // cmd does not use — so a perfectly ordinary validator like
+    //   npm test -- --grep "my test"
+    // arrives with mangled quotes and fails for reasons that have nothing to do
+    // with the user's tests. `raw_arg` bypasses that escaping, which is exactly
+    // what a shell string needs.
     #[cfg(windows)]
     let mut cmd = {
-        let mut c = Command::new("cmd");
-        c.args(["/C", command]);
-        c
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("cmd");
+        c.raw_arg("/C ");
+        c.raw_arg(command);
+        tokio::process::Command::from(c)
     };
     #[cfg(unix)]
     let mut cmd = {
-        let mut c = Command::new("sh");
+        let mut c = tokio::process::Command::new("sh");
         c.args(["-c", command]);
         c
     };
@@ -101,10 +109,19 @@ pub async fn run_validator(v: &Validator, cwd: &str) -> ValidationResult {
         }
         Err(e) => (false, e.to_string()),
     };
+    // Compress rather than truncate. A test suite prints its failures in the
+    // middle and its summary at the end, so cutting at 4000 bytes reliably keeps
+    // the part that says nothing and drops the part that says what broke.
+    let output = if output.len() > 4000 {
+        crate::context::compress_output(&output, 5, 15, 40).text
+    } else {
+        output
+    };
+
     ValidationResult {
         validator: v.label(),
         passed,
-        output: truncate(output, 4000),
+        output: truncate(output, 16_000),
         duration_ms: start.elapsed().as_millis() as u64,
     }
 }
@@ -152,6 +169,57 @@ mod tests {
         let v: Validator =
             serde_json::from_str(r#"{"kind":"custom","name":"docs","command":"x"}"#).unwrap();
         assert_eq!(v.label(), "docs");
+    }
+
+    #[tokio::test]
+    async fn a_command_with_quoted_arguments_runs_as_written() {
+        // `npm test -- --grep "my test"` is an entirely ordinary validator. If the
+        // shell string is escaped as if it were a single argv entry, the quotes
+        // reach the program mangled and it fails for reasons unrelated to the code.
+        let dir = std::env::temp_dir().join(format!("ar-quote-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("echo arg.js");
+        std::fs::write(&script, "console.log('ARG=' + process.argv[2]);\n").unwrap();
+
+        let v = Validator::new(
+            ValidatorKind::Custom,
+            // A quoted path WITH A SPACE, and a quoted argument containing one.
+            &format!("node \"{}\" \"two words\"", script.display()),
+        );
+        let r = run_validator(&v, ".").await;
+        assert!(r.passed, "the command should just run: {}", r.output);
+        assert!(r.output.contains("ARG=two words"), "got: {}", r.output);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_huge_failing_log_keeps_the_failure_not_just_the_first_4kb() {
+        // The bug this prevents: plain truncation keeps the banner and throws away
+        // the reason the build broke, leaving the agent to guess.
+        // Written to a file rather than passed with -e: quoting a script through
+        // cmd /C on Windows mangles it, and a test that silently runs nothing would
+        // have "passed" here by finding no output to complain about.
+        let dir = std::env::temp_dir().join(format!("ar-vlog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("noisy.js");
+        std::fs::write(
+            &script,
+            "for (let i = 0; i < 3000; i++) console.log('  ok ' + i + ' - passing test with padding');\n\
+             console.log('FAIL src/thing.test.ts > the important one');\n\
+             console.log('Tests: 1 failed, 3000 passed');\n\
+             process.exit(1);\n",
+        )
+        .unwrap();
+
+        let v = Validator::new(ValidatorKind::Tests, &format!("node \"{}\"", script.display()));
+        let r = run_validator(&v, ".").await;
+
+        assert!(!r.passed);
+        assert!(r.output.contains("FAIL src/thing.test.ts"), "the failure survives");
+        assert!(r.output.contains("Tests: 1 failed"), "and the summary line");
+        assert!(r.output.contains("omitted"), "and it admits what it cut");
+        assert!(r.output.len() < 20_000, "while staying small: {} bytes", r.output.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

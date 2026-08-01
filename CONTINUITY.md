@@ -85,8 +85,18 @@ pushes — undo is handed back as a command. Caught in the process: `git add --a
 would have swept our own DB into the user's commits, so init now writes a
 self-ignoring .agentrelay/.gitignore that keeps only config.json. 80 cargo tests.
 
-NEXT: Context-Optimizer core (file receipts + output compression) — the piece that
-actually saves tokens; then the morning report (reads checkpoints + validations).
+CONTEXT OPTIMIZER (2026-08-02): context.rs — file receipts (sha256; hash = truth,
+never a summary standing in for a file) + output compression (keeps failure lines,
+always states what it cut) + ContextHealthEstimated (is_estimate serialised, per
+plan §7.1 "Estimated only"). Receipts persist in a file_receipts table and are
+reloaded by Daemon::receipt_book, so a resume after a quota reset does not re-read
+the repo. Compression wired into the validator path. Two real bugs the tests
+forced out: (1) plain 4KB truncation kept the banner and dropped the failure;
+(2) run_shell on Windows escaped the shell string as argv, so any validator with
+quotes (`npm test -- --grep "x y"`) broke — now uses raw_arg. 93 cargo tests.
+
+NEXT: the morning report (reads checkpoints + validations + saved bytes into one
+"here is what happened overnight, with evidence"), then push notifications.
 
 ## Done log (most recent first)
 

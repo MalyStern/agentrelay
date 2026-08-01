@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS quota_snapshots (
   used REAL, limit_val REAL, reset_at_utc TEXT, raw TEXT, payload_ver INTEGER NOT NULL DEFAULT 1
 );
 
+-- What content the agent already holds, per file. Survives a restart on purpose:
+-- after a quota reset the whole point is to resume without re-reading the repo.
+CREATE TABLE IF NOT EXISTS file_receipts (
+  mission_id TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL,
+  bytes INTEGER NOT NULL, turn INTEGER NOT NULL, ts_utc TEXT,
+  payload_ver INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (mission_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS missions (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, contract TEXT NOT NULL,
   contract_ver INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL, autonomy TEXT NOT NULL,
@@ -329,6 +338,37 @@ impl Store {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    // ── file receipts (Context Optimizer) ─────────────────────────────────────
+
+    /// Upsert on (mission, path): only the newest content per file matters, and
+    /// keeping history here would grow without bound for no benefit.
+    pub fn save_receipt(&self, mission_id: &str, r: &crate::context::FileReceipt) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO file_receipts(mission_id, path, hash, bytes, turn, ts_utc)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(mission_id, path) DO UPDATE SET
+               hash=excluded.hash, bytes=excluded.bytes, turn=excluded.turn, ts_utc=excluded.ts_utc",
+            params![mission_id, r.path, r.hash, r.bytes as i64, r.turn as i64, (self.clock)()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_receipts(&self, mission_id: &str) -> rusqlite::Result<Vec<crate::context::FileReceipt>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT path, hash, bytes, turn FROM file_receipts WHERE mission_id = ?1 ORDER BY path",
+        )?;
+        let rows = stmt.query_map(params![mission_id], |r| {
+            Ok(crate::context::FileReceipt {
+                path: r.get(0)?,
+                hash: r.get(1)?,
+                bytes: r.get::<_, i64>(2)? as usize,
+                turn: r.get::<_, i64>(3)? as u32,
+            })
+        })?;
+        rows.collect()
     }
 
     // ── validations (Watchtower layer-2 evidence) ─────────────────────────────
