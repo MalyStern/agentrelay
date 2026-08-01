@@ -12,6 +12,7 @@ pub mod fake_adapter;
 pub mod error;
 pub mod events;
 pub mod guard;
+pub mod keepawake;
 pub mod mission;
 pub mod process;
 pub mod provider;

@@ -55,9 +55,11 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 6. ~~Real Claude subprocess adapter~~ ✅ DONE (claude_adapter.rs: spawn_stream_json + ClaudeAdapter; 3 tests incl. a real node-subprocess integration test).
 7. ~~MissionRunner (mission.rs)~~ ✅ DONE (3 tests: clean turn logs+accumulates, guard violation interrupts, rate-limit -> resume plan). Ties adapter+guard+quota+store.
 8. ~~Process Manager (process.rs)~~ ✅ DONE — ProcessGroup: Windows Job Object (KILL_ON_JOB_CLOSE) / Unix process-group; kill_tree kills the whole tree, verified with a grandchild integration test. 49 cargo tests.
-9. **Wire ProcessGroup into the adapter** so ClaudeAdapter.interrupt() really kills the tree (spawn_stream_json returns a kill handle). Then Credential Broker (keyring), keep-awake, daemon binary + IPC + CLI. NEXT.
-
-4. Then: the async `ProviderAdapter` trait (add tokio/async-trait), the Claude adapter (spawn `claude -p`, parse stream-json → port `stream-json.ts`), the Process Manager (Job Objects on Windows via the `windows` crate), Credential Broker (`keyring` crate).
+9. ~~Wire ProcessGroup into the adapter~~ ✅ DONE — ClaudeAdapter.interrupt() kills the tree; verified killing the group ends the stream. 50 cargo tests.
+10. **Keep-awake** (Windows SetThreadExecutionState with ES_CONTINUOUS + ES_SYSTEM_REQUIRED; mac `caffeinate`; Linux `systemd-inhibit`). Small, self-contained. NEXT.
+11. Credential Broker (`keyring` crate) — keyring_ref, never the secret on disk; GitHub-App token later.
+12. The daemon binary + IPC (loopback + token) + a minimal `agentrelay` CLI (init/run/status). This makes it actually runnable.
+13. In parallel / when useful: improve the shipped CLIs (patchproof/repodoctor/lastgood) per the viral-oss memory.
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
 
 Update this "NEXT STEP" after each increment.
