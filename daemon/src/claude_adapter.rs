@@ -7,18 +7,25 @@
 use crate::adapter::{EventStream, ProviderAdapter};
 use crate::claude_stream::ClaudeStreamParser;
 use crate::error::{AgentRelayError, ErrorCode, Result};
+use crate::process::ProcessGroup;
 use crate::provider::{
     Capabilities, Guard, QuotaState, SessionHandle, SessionSpec, TurnInput,
 };
 use async_trait::async_trait;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-/// Spawn `program args` in `cwd`, stream its stdout lines through the Claude
-/// stream-json parser, and yield normalized events. Flushes a newline-less final
+/// Spawn `program args` in `cwd` INTO A KILL-GROUP, stream its stdout through the
+/// Claude parser, and return the event stream plus the group — so `interrupt` can
+/// kill the whole process tree, not just the agent. Flushes a newline-less final
 /// line at EOF.
-pub fn spawn_stream_json(program: &str, args: &[String], cwd: &str) -> Result<EventStream> {
+pub fn spawn_stream_json(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+) -> Result<(EventStream, Arc<ProcessGroup>)> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .current_dir(cwd)
@@ -26,9 +33,8 @@ pub fn spawn_stream_json(program: &str, args: &[String], cwd: &str) -> Result<Ev
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| AgentRelayError::new(ErrorCode::ProcessSpawnFailed, format!("{program}: {e}")))?;
+    let group = Arc::new(ProcessGroup::new()?);
+    let mut child = group.spawn(&mut cmd)?;
     let stdout = child
         .stdout
         .take()
@@ -44,7 +50,7 @@ pub fn spawn_stream_json(program: &str, args: &[String], cwd: &str) -> Result<Ev
                         yield e;
                     }
                 }
-                Ok(None) => break, // EOF
+                Ok(None) => break, // EOF (also happens when the tree is killed)
                 Err(_) => break,
             }
         }
@@ -53,18 +59,21 @@ pub fn spawn_stream_json(program: &str, args: &[String], cwd: &str) -> Result<Ev
         }
         let _ = child.wait().await;
     };
-    Ok(Box::pin(stream))
+    Ok((Box::pin(stream), group))
 }
 
 pub struct ClaudeAdapter {
     /// The engine program — "claude" in production, a stub in tests.
     program: String,
+    /// The active turn's process group, so interrupt() can kill the tree.
+    current: Mutex<Option<Arc<ProcessGroup>>>,
 }
 
 impl Default for ClaudeAdapter {
     fn default() -> Self {
         ClaudeAdapter {
             program: "claude".to_string(),
+            current: Mutex::new(None),
         }
     }
 }
@@ -76,6 +85,7 @@ impl ClaudeAdapter {
     pub fn with_program(program: impl Into<String>) -> Self {
         ClaudeAdapter {
             program: program.into(),
+            current: Mutex::new(None),
         }
     }
 
@@ -133,7 +143,9 @@ impl ProviderAdapter for ClaudeAdapter {
 
     async fn run_turn(&self, handle: &SessionHandle, input: TurnInput) -> Result<EventStream> {
         let args = self.turn_args(handle, &input);
-        spawn_stream_json(&self.program, &args, &handle.cwd)
+        let (stream, group) = spawn_stream_json(&self.program, &args, &handle.cwd)?;
+        *self.current.lock().unwrap() = Some(group);
+        Ok(stream)
     }
 
     async fn steer(&self, _handle: &SessionHandle, _message: &str) -> Result<()> {
@@ -142,8 +154,11 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn interrupt(&self, _handle: &SessionHandle) -> Result<()> {
-        // Real process-tree kill is the Process Manager's job (Windows Job Object /
-        // Unix pgid) — the next increment. This is the signal hook.
+        // Kill the whole process tree of the active turn (agent + anything it spawned).
+        let group = self.current.lock().unwrap().take();
+        if let Some(g) = group {
+            g.kill_tree()?;
+        }
         Ok(())
     }
 
@@ -185,7 +200,10 @@ mod tests {
             json!({"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}),
             json!({"type":"result","subtype":"success","session_id":"sess_x","usage":{"input_tokens":1,"output_tokens":1}}),
         ]);
-        let stream = spawn_stream_json("node", &args, ".").expect("spawn node");
+        let (stream, _group) = match spawn_stream_json("node", &args, ".") {
+            Ok(t) => t,
+            Err(e) => panic!("spawn node: {e:?}"),
+        };
         let events: Vec<AgentEvent> = stream.collect().await;
         let kinds: Vec<_> = events.iter().map(std::mem::discriminant).collect();
         let expected = [
@@ -202,6 +220,27 @@ mod tests {
             .map(|_| ())
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProcessSpawnFailed);
+    }
+
+    #[tokio::test]
+    async fn killing_the_group_ends_the_stream() {
+        use std::time::Duration;
+        use tokio::time::timeout;
+        // Emit one line, then keep the process alive forever.
+        let script = "process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'hi'}]}})+'\\n');setTimeout(()=>{},60000);";
+        let (mut stream, group) = match spawn_stream_json("node", &["-e".into(), script.into()], ".") {
+            Ok(t) => t,
+            Err(e) => panic!("spawn: {e:?}"),
+        };
+        let first = stream.next().await;
+        assert!(matches!(first, Some(AgentEvent::TextDelta { .. })));
+        group.kill_tree().unwrap();
+        // With the process killed, stdout hits EOF and the stream ends promptly.
+        let drained = timeout(Duration::from_secs(5), async {
+            while stream.next().await.is_some() {}
+        })
+        .await;
+        assert!(drained.is_ok(), "stream did not end after kill_tree");
     }
 
     #[tokio::test]
