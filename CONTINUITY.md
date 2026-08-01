@@ -54,7 +54,8 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 5. ~~Async ProviderAdapter trait + fake adapter~~ ✅ DONE (adapter.rs + fake_adapter.rs, 4 async tests; tokio/futures/async-stream).
 6. ~~Real Claude subprocess adapter~~ ✅ DONE (claude_adapter.rs: spawn_stream_json + ClaudeAdapter; 3 tests incl. a real node-subprocess integration test).
 7. ~~MissionRunner (mission.rs)~~ ✅ DONE (3 tests: clean turn logs+accumulates, guard violation interrupts, rate-limit -> resume plan). Ties adapter+guard+quota+store.
-8. **Process Manager** (Windows Job Objects via `windows` crate / Unix pgid) — real process-tree kill + external_resources reconcile-before-stop. Then Credential Broker (`keyring`), keep-awake, then the daemon binary + IPC. NEXT.
+8. ~~Process Manager (process.rs)~~ ✅ DONE — ProcessGroup: Windows Job Object (KILL_ON_JOB_CLOSE) / Unix process-group; kill_tree kills the whole tree, verified with a grandchild integration test. 49 cargo tests.
+9. **Wire ProcessGroup into the adapter** so ClaudeAdapter.interrupt() really kills the tree (spawn_stream_json returns a kill handle). Then Credential Broker (keyring), keep-awake, daemon binary + IPC + CLI. NEXT.
 
 4. Then: the async `ProviderAdapter` trait (add tokio/async-trait), the Claude adapter (spawn `claude -p`, parse stream-json → port `stream-json.ts`), the Process Manager (Job Objects on Windows via the `windows` crate), Credential Broker (`keyring` crate).
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
