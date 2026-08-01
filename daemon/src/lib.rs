@@ -20,6 +20,7 @@ pub mod process;
 pub mod provider;
 pub mod quota;
 pub mod send_gate;
+pub mod validator;
 pub mod store;
 
 pub use error::{AgentRelayError, ErrorCode, Result};

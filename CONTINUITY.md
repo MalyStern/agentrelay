@@ -58,8 +58,9 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 9. ~~Wire ProcessGroup into the adapter~~ ✅ DONE — ClaudeAdapter.interrupt() kills the tree; verified killing the group ends the stream. 50 cargo tests.
 10. ~~Keep-awake~~ ✅ DONE (keepawake.rs, 51 tests; ES_CONTINUOUS+ES_SYSTEM_REQUIRED).
 11. ~~Credential Broker~~ ✅ DONE (credential.rs, 54 tests) — SecretStore trait (InMemory for tests / OsKeychain via keyring for prod), CredRef (DB-safe), env_for injection, redact().
-12. **The daemon binary + IPC + CLI** — a `main.rs` (bin) that runs the tokio daemon, a loopback+token IPC surface, and a minimal `agentrelay` CLI (init/run/status). This makes it actually runnable end-to-end. NEXT.
-13. Then: Watchtower full (3 layers), Isolation-Ring (docker via bollard), VCS/CI loop, Codex adapter, ACP, Tauri UI, 23-lang i18n. And improve the shipped CLIs (patchproof/repodoctor/lastgood) per the viral-oss memory.
+12. ~~Daemon binary + CLI~~ ✅ DONE — daemon.rs (Daemon: config+store+keep-awake+MissionRunner) + main.rs (agentrelay CLI: init/status/run/doctor). 58 tests; CLI smoke-tested (init/status/doctor work). `run` works the moment `claude` is installed. IPC surface (loopback+token) still TODO for the UI.
+13. **NEXT options** (pick per value): (a) IPC surface (loopback HTTP+token) so a UI/remote can drive it; (b) Codex adapter (app-server JSON-RPC) — 2nd provider; (c) Watchtower layer-2 validators (run tests/typecheck as completion evidence); (d) improve the shipped CLIs (patchproof/repodoctor/lastgood). ~~(c) validators~~ ✅ DONE (validator.rs, 61 tests) — run real commands, exit code = verdict, all_passed gate (empty set = not proven). Next recommend (a) IPC surface or (b) Codex adapter.
+14. Later: Isolation-Ring (docker/bollard), VCS/CI loop, ACP generic, Tauri UI, 23-lang i18n, Cloud-delegated.
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
 
 Update this "NEXT STEP" after each increment.
