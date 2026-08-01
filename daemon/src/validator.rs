@@ -35,11 +35,24 @@ pub struct Validator {
     pub kind: ValidatorKind,
     /// The shell command to run; exit 0 = pass.
     pub command: String,
+    /// Optional label. Two `custom` validators are indistinguishable in a report
+    /// without one, so the name (when given) is what gets shown and persisted.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl Validator {
     pub fn new(kind: ValidatorKind, command: impl Into<String>) -> Self {
-        Validator { kind, command: command.into() }
+        Validator { kind, command: command.into(), name: None }
+    }
+
+    pub fn named(kind: ValidatorKind, name: impl Into<String>, command: impl Into<String>) -> Self {
+        Validator { kind, command: command.into(), name: Some(name.into()) }
+    }
+
+    /// What to show the user: the label if there is one, else the kind.
+    pub fn label(&self) -> String {
+        self.name.clone().unwrap_or_else(|| self.kind.as_str().to_string())
     }
 }
 
@@ -89,7 +102,7 @@ pub async fn run_validator(v: &Validator, cwd: &str) -> ValidationResult {
         Err(e) => (false, e.to_string()),
     };
     ValidationResult {
-        validator: v.kind.as_str().to_string(),
+        validator: v.label(),
         passed,
         output: truncate(output, 4000),
         duration_ms: start.elapsed().as_millis() as u64,
@@ -120,6 +133,25 @@ mod tests {
         assert!(r.passed);
         assert!(r.output.to_lowercase().contains("v")); // node prints e.g. v24.x
         assert_eq!(r.validator, "tests");
+    }
+
+    #[tokio::test]
+    async fn a_named_validator_reports_its_name_not_its_kind() {
+        let v = Validator::named(ValidatorKind::Custom, "no-todo-left", "node --version");
+        let r = run_validator(&v, ".").await;
+        assert_eq!(r.validator, "no-todo-left");
+        // …and an unnamed one still falls back to the kind.
+        assert_eq!(Validator::new(ValidatorKind::Custom, "x").label(), "custom");
+    }
+
+    #[test]
+    fn name_is_optional_in_config_json() {
+        let v: Validator =
+            serde_json::from_str(r#"{"kind":"tests","command":"npm test"}"#).unwrap();
+        assert_eq!(v.label(), "tests");
+        let v: Validator =
+            serde_json::from_str(r#"{"kind":"custom","name":"docs","command":"x"}"#).unwrap();
+        assert_eq!(v.label(), "docs");
     }
 
     #[tokio::test]

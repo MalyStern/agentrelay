@@ -105,10 +105,25 @@ impl Daemon {
                 format!("no {DIR} here — run `agentrelay init` first"),
             ));
         }
-        let config = std::fs::read_to_string(Self::config_path(&root))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        // A MISSING config is fine (defaults). A config that exists but doesn't parse
+        // is not: silently falling back would drop the user's guards and validators
+        // without a word — the supervisor would look armed while running unguarded.
+        let config = match std::fs::read_to_string(Self::config_path(&root)) {
+            Err(_) => Config::default(),
+            // Notepad and PowerShell's `Set-Content -Encoding utf8` both prepend a
+            // UTF-8 BOM, which serde rejects — on Windows that is the *normal* way a
+            // user edits this file, so strip it rather than blame them.
+            Ok(s) => serde_json::from_str(s.strip_prefix('\u{feff}').unwrap_or(&s)).map_err(|e| {
+                AgentRelayError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "{} is not valid config: {e}\nFix it (or delete it to use defaults) — \
+                         refusing to run with guards silently disabled.",
+                        Self::config_path(&root).display()
+                    ),
+                )
+            })?,
+        };
         let store = Store::open(Self::db_path(&root).to_str().unwrap())
             .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
         Ok(Daemon { root, store, config })
@@ -240,6 +255,46 @@ mod tests {
     fn open_without_init_errors() {
         let root = tmp();
         assert!(Daemon::open(&root).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_broken_config_is_an_error_not_a_silent_fallback() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        std::fs::write(Daemon::config_path(&root), "{ this is not json ").unwrap();
+        let err = match Daemon::open(&root) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("a broken config must not open silently"),
+        };
+        assert!(err.contains("not valid config"), "got: {err}");
+        // The danger this guards: a typo must never quietly drop the guards.
+        assert!(err.contains("guards silently disabled"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_config_saved_by_notepad_or_powershell_with_a_bom_still_parses() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            "\u{feff}{\"program\":\"codex\",\"validators\":[{\"kind\":\"tests\",\"command\":\"npm test\"}]}",
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        assert_eq!(d.config().program, "codex");
+        assert_eq!(d.config().validators.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_missing_config_still_falls_back_to_defaults() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        std::fs::remove_file(Daemon::config_path(&root)).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        assert_eq!(d.config().program, Config::default().program);
         let _ = std::fs::remove_dir_all(&root);
     }
 
