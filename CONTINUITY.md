@@ -56,10 +56,10 @@ Port the remaining pure-logic modules from the (QA-hardened) TS to Rust, one at 
 7. ~~MissionRunner (mission.rs)~~ ✅ DONE (3 tests: clean turn logs+accumulates, guard violation interrupts, rate-limit -> resume plan). Ties adapter+guard+quota+store.
 8. ~~Process Manager (process.rs)~~ ✅ DONE — ProcessGroup: Windows Job Object (KILL_ON_JOB_CLOSE) / Unix process-group; kill_tree kills the whole tree, verified with a grandchild integration test. 49 cargo tests.
 9. ~~Wire ProcessGroup into the adapter~~ ✅ DONE — ClaudeAdapter.interrupt() kills the tree; verified killing the group ends the stream. 50 cargo tests.
-10. **Keep-awake** (Windows SetThreadExecutionState with ES_CONTINUOUS + ES_SYSTEM_REQUIRED; mac `caffeinate`; Linux `systemd-inhibit`). Small, self-contained. NEXT.
-11. Credential Broker (`keyring` crate) — keyring_ref, never the secret on disk; GitHub-App token later.
-12. The daemon binary + IPC (loopback + token) + a minimal `agentrelay` CLI (init/run/status). This makes it actually runnable.
-13. In parallel / when useful: improve the shipped CLIs (patchproof/repodoctor/lastgood) per the viral-oss memory.
+10. ~~Keep-awake~~ ✅ DONE (keepawake.rs, 51 tests; ES_CONTINUOUS+ES_SYSTEM_REQUIRED).
+11. ~~Credential Broker~~ ✅ DONE (credential.rs, 54 tests) — SecretStore trait (InMemory for tests / OsKeychain via keyring for prod), CredRef (DB-safe), env_for injection, redact().
+12. **The daemon binary + IPC + CLI** — a `main.rs` (bin) that runs the tokio daemon, a loopback+token IPC surface, and a minimal `agentrelay` CLI (init/run/status). This makes it actually runnable end-to-end. NEXT.
+13. Then: Watchtower full (3 layers), Isolation-Ring (docker via bollard), VCS/CI loop, Codex adapter, ACP, Tauri UI, 23-lang i18n. And improve the shipped CLIs (patchproof/repodoctor/lastgood) per the viral-oss memory.
 5. In parallel / when Rust is blocked: improve the shipped CLIs (patchproof/repodoctor/lastgood) and other products per the viral-oss memory.
 
 Update this "NEXT STEP" after each increment.
