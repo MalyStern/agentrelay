@@ -22,6 +22,7 @@ pub mod mission;
 pub mod process;
 pub mod provider;
 pub mod quota;
+pub mod report;
 pub mod send_gate;
 pub mod validator;
 pub mod store;

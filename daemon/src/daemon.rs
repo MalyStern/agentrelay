@@ -227,6 +227,22 @@ impl Daemon {
         let validations = self.run_validators(unit_id, cwd).await;
         let gate_passed = crate::validator::all_passed(&validations);
 
+        // Record the unit itself, not just its validations. Without this row the
+        // morning report has nothing to iterate: it found the checkpoints but not
+        // the units, and cheerfully reported "all validators passed" on a night
+        // where one had failed. A report that is wrong in the reassuring direction
+        // is worse than no report.
+        let _ = self.store.upsert_work_unit(&crate::store::WorkUnitRow {
+            id: unit_id.to_string(),
+            mission_id: mission_id.to_string(),
+            seq: None,
+            title: Some(summary.to_string()),
+            contract: serde_json::json!({}),
+            worker: None,
+            status: Some(if gate_passed { "done" } else { "failed" }.to_string()),
+            worktree_path: Some(cwd.to_string()),
+        });
+
         // No validators configured is NOT a pass — there is no evidence either way,
         // and silently checkpointing would present an unverified state as verified.
         if !gate_passed {
@@ -260,6 +276,16 @@ impl Daemon {
 }
 
 impl Daemon {
+    /// What actually happened overnight, sourced line by line.
+    pub fn morning_report(&self, mission_id: &str, cwd: &str) -> crate::report::MorningReport {
+        // Saved bytes is a counter we actually incremented each time a re-read was
+        // skipped — NOT the sum of the receipts, which is the total content held and
+        // would overstate the saving every time. A report built to be auditable
+        // cannot afford a flattering number in it.
+        let saved = self.store.get_saved_bytes(mission_id).unwrap_or(0);
+        crate::report::build(&self.store, mission_id, cwd, saved)
+    }
+
     /// Load this mission's file receipts — what the agent already holds.
     ///
     /// Called on resume: after a quota reset the agent starts with an empty
@@ -282,6 +308,9 @@ impl Daemon {
     ) -> crate::context::ReadDecision {
         let decision = book.observe(path, content, turn);
         let _ = self.store.save_receipt(mission_id, decision.receipt());
+        if let crate::context::ReadDecision::AlreadyHave { saved_bytes, .. } = &decision {
+            let _ = self.store.add_saved_bytes(mission_id, *saved_bytes);
+        }
         decision
     }
 }
@@ -460,6 +489,12 @@ mod tests {
 
         assert!(!out.gate_passed);
         assert!(out.checkpoint.is_none(), "broken work must never become a restore point");
+
+        // …and the morning report must SAY it failed. The bug this pins: without a
+        // work-unit row the report saw no units and reported the night as clean.
+        let report = d.morning_report("m1", &cwd);
+        assert_eq!(report.units_failed, 1, "{}", report.render());
+        assert!(report.headline().contains("FAILED"), "{}", report.headline());
         assert_eq!(crate::checkpoint::head(&cwd).unwrap(), before, "HEAD must not move");
         // The work itself is untouched — visible in the tree for the human to judge.
         assert!(root.join("broken.txt").exists());
@@ -492,6 +527,9 @@ mod tests {
             let again = d.observe_read(&mut book, "m1", "src/big.rs", &big, 1);
             assert!(!again.should_send(), "unchanged file: 40 KB not spent again");
             assert_eq!(book.saved_bytes, 40_000);
+            // The saving is counted at the moment of the skip, so the morning
+            // report can state it without inferring — and it survives the restart.
+            assert_eq!(d.store().get_saved_bytes("m1").unwrap(), 40_000);
 
             // And the safety property still holds across the restart.
             let edited = d.observe_read(&mut book, "m1", "src/big.rs", b"different now", 2);

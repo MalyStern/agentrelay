@@ -95,8 +95,21 @@ forced out: (1) plain 4KB truncation kept the banner and dropped the failure;
 (2) run_shell on Windows escaped the shell string as argv, so any validator with
 quotes (`npm test -- --grep "x y"`) broke — now uses raw_arg. 93 cargo tests.
 
-NEXT: the morning report (reads checkpoints + validations + saved bytes into one
-"here is what happened overnight, with evidence"), then push notifications.
+MORNING REPORT (2026-08-02): report.rs — every line carries its provenance
+(VERIFIED = a validator's exit code / RECORDED = the supervisor observed it /
+ESTIMATED = a rule of thumb). Nothing the model claimed appears at all. `agentrelay
+report` (+ --short for a phone), exits non-zero when a unit failed so a script can
+decide whether to wake someone. saved_bytes is a real counter incremented at each
+skip, not inferred from the receipts (which would overstate it every time). Two
+real bugs caught by running it end to end: (1) complete_unit never wrote a
+work_unit row, so the report saw no units and reported a night with a FAILED unit
+as "all validators passed" — wrong in the reassuring direction; (2) git() trimmed
+whole stdout, which eats the leading column of porcelain's FIRST line, so the first
+modified file's path lost a character (".agentrelay/x" -> "agentrelay/x").
+100 cargo tests.
+
+NEXT: push notifications (ntfy/Telegram) so the headline reaches a phone; then
+Phase-2 (Mission-Contract state machine, Isolation-Ring, cost ledger).
 
 ## Done log (most recent first)
 

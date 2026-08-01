@@ -355,6 +355,33 @@ impl Store {
         Ok(())
     }
 
+    /// Running total of bytes NOT re-sent because a file was unchanged. Counted at
+    /// the moment each skip happens — the only way this number can be true.
+    pub fn add_saved_bytes(&self, mission_id: &str, n: usize) -> rusqlite::Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(meta.value AS INTEGER) + ?3 AS TEXT)",
+            params![format!("saved_bytes:{mission_id}"), n.to_string(), n as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_saved_bytes(&self, mission_id: &str) -> rusqlite::Result<usize> {
+        let r: rusqlite::Result<String> = self.conn.lock().unwrap().query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![format!("saved_bytes:{mission_id}")],
+            |r| r.get(0),
+        );
+        match r {
+            Ok(v) => Ok(v.parse().unwrap_or(0)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn get_receipts(&self, mission_id: &str) -> rusqlite::Result<Vec<crate::context::FileReceipt>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

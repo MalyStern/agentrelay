@@ -57,6 +57,16 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// The morning report: what actually happened overnight, with its sources.
+    Report {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        #[arg(long, default_value = "default")]
+        mission: String,
+        /// Print only the one-line headline (for a phone / a status bar).
+        #[arg(long)]
+        short: bool,
+    },
     /// Start the loopback IPC server (for a UI / remote control).
     Serve {
         /// Address to bind (loopback only).
@@ -173,6 +183,21 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 (Some(_), _) => println!("\nValidators passed; nothing to checkpoint (the tree was already clean)."),
                 (None, Some(e)) => println!("\nValidators passed, but the checkpoint could not be made: {e}"),
                 (None, None) => {}
+            }
+            Ok(())
+        }
+        Cmd::Report { cwd, mission, short } => {
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            let r = d.morning_report(&mission, &cwd);
+            if short {
+                println!("{}", r.headline());
+            } else {
+                print!("{}", r.render());
+            }
+            // A night with failed units exits non-zero: the report is meant to be
+            // usable from a script that decides whether to wake someone.
+            if r.units_failed > 0 {
+                return Err(format!("{} unit(s) failed overnight", r.units_failed));
             }
             Ok(())
         }

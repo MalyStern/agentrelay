@@ -37,7 +37,11 @@ pub struct Checkpoint {
     pub files_changed: usize,
 }
 
-fn git(cwd: &str, args: &[&str]) -> Result<String> {
+/// Raw stdout, untrimmed. `git status --porcelain` is column-sensitive: the first
+/// two characters are the status code and the third is a separator, so trimming
+/// the output eats the leading column of the FIRST line and silently shortens that
+/// file's path by one character. Anything parsing fixed columns must use this.
+fn git_raw(cwd: &str, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -53,7 +57,12 @@ fn git(cwd: &str, args: &[&str]) -> Result<String> {
             ),
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Trimmed stdout — for the many commands whose output is a single value.
+fn git(cwd: &str, args: &[&str]) -> Result<String> {
+    Ok(git_raw(cwd, args)?.trim().to_string())
 }
 
 /// Is this a git worktree at all? Everything else here assumes it is.
@@ -72,11 +81,11 @@ pub fn branch(cwd: &str) -> Option<String> {
 
 /// Paths with uncommitted changes, staged or not, including untracked files.
 pub fn dirty_paths(cwd: &str) -> Result<Vec<String>> {
-    let out = git(cwd, &["status", "--porcelain", "--untracked-files=all"])?;
+    let out = git_raw(cwd, &["status", "--porcelain", "--untracked-files=all"])?;
     Ok(out
         .lines()
         .filter(|l| l.len() > 3)
-        .map(|l| l[3..].trim().to_string())
+        .map(|l| l[3..].to_string())
         .filter(|p| !p.is_empty())
         .collect())
 }
@@ -215,6 +224,31 @@ mod tests {
 
     fn cleanup(p: &str) {
         let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn dotfile_paths_survive_status_parsing() {
+        // The bug this caught: trimming the whole `git status --porcelain` output
+        // removes the leading status column of the FIRST line only, so the first
+        // modified file silently lost a character — ".agentrelay/config.json"
+        // was reported as "agentrelay/config.json". A report that renames the
+        // user's files is worse than no report.
+        let p = repo();
+        std::fs::create_dir_all(std::path::Path::new(&p).join(".config")).unwrap();
+        std::fs::write(std::path::Path::new(&p).join(".config/settings.json"), "{}\n").unwrap();
+        git(&p, &["add", "-A"]).unwrap();
+        git(&p, &["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "add"]).unwrap();
+
+        std::fs::write(std::path::Path::new(&p).join(".config/settings.json"), "{\"a\":1}\n").unwrap();
+        std::fs::write(std::path::Path::new(&p).join("zz.txt"), "second\n").unwrap();
+
+        let dirty = dirty_paths(&p).unwrap();
+        assert!(
+            dirty.contains(&".config/settings.json".to_string()),
+            "the dot must survive: {dirty:?}"
+        );
+        assert!(dirty.contains(&"zz.txt".to_string()), "{dirty:?}");
+        cleanup(&p);
     }
 
     #[test]
