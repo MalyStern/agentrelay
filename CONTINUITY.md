@@ -67,6 +67,14 @@ Update this "NEXT STEP" after each increment.
 
 COMPLETION GATE WIRED (2026-08-02): validators run in the daemon (Daemon.run_validators), persist to the validations table, gate completion (all_passed); CLI `agentrelay validate`; Config.validators. Fixed: ported SCHEMA was missing the validations+quota_snapshots tables. 65 cargo tests.
 
+CONFIG TRANSPARENCY SWEEP (2026-08-02): the same fail-silent config bug existed in
+all four products — a broken/typo'd config was caught and ignored, so the user's
+settings were never applied and nothing said so. Fixed everywhere: loud errors
+naming the file and the valid values, UTF-8 BOM accepted (Windows Notepad/
+PowerShell), JSONC comments in the CLIs, `init` commands that write a commented
+config listing every option. patchproof 32->42, repodoctor 28->38, lastgood
+23->33, daemon 65->70 tests. All pushed.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
