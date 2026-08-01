@@ -22,6 +22,11 @@ async-trait = "0.1"
 futures = "0.3"
 async-stream = "0.3"
 keyring = "3"
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "agentrelay"
+path = "src/main.rs"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
