@@ -319,6 +319,21 @@ PHASE-2 IS DONE: mission state machine, Isolation-Ring (live-verified), cost led
 NEXT (Phase-3): Codex adapter (app-server JSON-RPC), ACP generic adapter. Phase-4:
 Tauri UI, 23-language i18n.
 
+PHASE-3 STARTED: ACP (2026-08-02). acp.rs - the Agent Client Protocol wire layer
+(JSON-RPC 2.0 over stdio, 'LSP for coding agents'). ~25 agents speak it, so one
+protocol beats one bespoke adapter that rots when a CLI changes its flags. It
+translates ACP session/update notifications into the SAME AgentEvent stream, so
+guards/checkpoints/budget/report work unchanged - proven by a test that runs an
+ACP tool_call through the real evaluate_guards and gets it blocked. Defensive by
+design: any unparseable/unknown frame is Ignored, never fatal, so a new agent
+version is a missing feature and not a crash. Reads token usage under BOTH
+camelCase and snake_case (reading one and zeroing the other would make a turn look
+free and disarm the budget). Thinking chunks are dropped, same rule as the Claude
+parser. Permission requests carry their id so our guards can answer, and a refusal
+is 'rejected' not 'cancelled' - cancelled reads as the user walking away and
+invites a retry. NOT yet verified against a live ACP agent: that is the next
+contract test (gemini --acp is the easiest). 220 cargo tests.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

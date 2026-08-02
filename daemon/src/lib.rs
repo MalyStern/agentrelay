@@ -5,6 +5,7 @@
 //! lockstep: the TS version is the executable spec (tested there), and this is the
 //! production implementation (tested here). See `docs/adr/0001-*`.
 
+pub mod acp;
 pub mod adapter;
 pub mod checkpoint;
 pub mod claude_adapter;
