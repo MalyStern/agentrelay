@@ -1,12 +1,22 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/session-check.mjs\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "agentrelay hook --cwd \"${CLAUDE_PROJECT_DIR}\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/guard.mjs\""
           }
         ]
       }

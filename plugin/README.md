@@ -48,6 +48,19 @@ cd daemon && cargo build --release
 Edit `.agentrelay/config.json` — the guards, the validators (your real `npm test` etc.),
 a spending cap, the scope — then work as normal. The hook does the rest.
 
+## If the engine isn't installed, the plugin does no harm
+
+The hooks run through a small Node wrapper (`bin/guard.mjs`), so the plugin is
+**fail-safe** when the `agentrelay` binary is missing: the guard **allows every tool
+call quietly** (it does not error on each call, and it does not block your work), and
+a **SessionStart notice fires once** to say supervision is off and how to arm it. So
+installing the plugin before the binary is a no-op with one clear warning — not the
+per-call noise an earlier version would have produced.
+
+This means the plugin's hooks need **Node** on PATH (which Claude Code coding users
+almost always have). If you don't use Node, install the binary and run
+`agentrelay install-hook` instead — that writes a direct hook with no Node in the path.
+
 ## What a plugin can and cannot do here — honestly
 
 - **The guard works fully as a plugin.** The hook is stateless (one process per tool
