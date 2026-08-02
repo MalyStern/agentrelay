@@ -1,0 +1,235 @@
+{
+  "cli.about": "Supervise les exécutions nocturnes d'agents de codage IA — en local.",
+
+  "error.prefix": "agentrelay : {msg}",
+  "error.no_workspace": "aucun {dir} ici — lancez d'abord `agentrelay init`",
+  "error.bad_config": "{path} n'est pas une configuration valide : {err}\nCorrigez-le (ou supprimez-le pour utiliser les valeurs par défaut) — nous refusons de tourner avec les gardes désactivés en silence.",
+  "error.budget_reached": "budget atteint — aucun tour ne démarre : {reason}",
+  "error.no_baseline": {
+    "one": "aucun point de restauration enregistré : {count} fichier était déjà non validé et aucune référence n'a été enregistrée, donc le superviseur ne peut pas distinguer votre travail de celui de l'agent. Lancez `agentrelay begin` avant que l'agent commence, ou validez/remisez vos changements d'abord. Rien n'a été touché.",
+    "other": "aucun point de restauration enregistré : {count} fichiers étaient déjà non validés et aucune référence n'a été enregistrée, donc le superviseur ne peut pas distinguer votre travail de celui de l'agent. Lancez `agentrelay begin` avant que l'agent commence, ou validez/remisez vos changements d'abord. Rien n'a été touché."
+  },
+
+  "init.done": "Initialisé .agentrelay/ (config.json + agentrelay.db).",
+  "init.next": "Ensuite : `agentrelay run \"<votre tâche>\"` — ou éditez d'abord .agentrelay/config.json.",
+
+  "status.title": "État d'AgentRelay",
+  "status.db": "bd :         {path}",
+  "status.schema": "schéma :     v{version}",
+  "status.missions": "missions :   {count}",
+  "status.engine": "moteur :     {program}",
+  "status.keep_awake": "garder éveillé : {value}",
+  "status.state": "état :       {state} — {meaning}",
+  "status.waiting_marker": "               ^ rien ne se passera tant que vous n'agissez pas.",
+  "status.spent": "{budget} Dépensé jusqu'ici : ${spent}.",
+
+  "run.finished": "Tour terminé :",
+  "run.events": "événements :   {count}",
+  "run.tokens": "jetons utilisés : {count}",
+  "run.completed": "terminé :      {value}",
+  "run.interrupted": "INTERROMPU par un garde :",
+  "run.violation": "    - {reason} ({detail})",
+  "run.rate_limited": "QUOTA ATTEINT — reprise à {at} (attente {ms} ms)",
+
+  "doctor.title": "Diagnostic d'AgentRelay",
+  "doctor.ok": "  [OK] {tool} {path}",
+  "doctor.missing": "  [--] {tool} {hint}",
+  "doctor.no_claude": "Sans `claude`, le daemon ne peut rien superviser — tout le reste\nici (gardes, points de restauration, le rapport) fonctionne encore, mais il n'y a pas d'agent.",
+  "doctor.missing_required": "un outil requis manque (git/node)",
+
+  "validate.none": "Aucun validateur configuré (.agentrelay/config.json → validators).",
+  "validate.result": "  [{status}] {name} ({ms} ms)",
+  "validate.pass": "OK",
+  "validate.fail": "ÉCHEC",
+  "validate.all_passed": "Tous les validateurs ont réussi — unité complète (preuve, pas la parole du modèle).",
+  "validate.failed": "les validateurs ont échoué — l'unité n'est PAS complète",
+
+  "hook.deny.unreadable": "AgentRelay n'a pas pu lire cet appel d'outil ({err}), il est donc refusé plutôt que deviné.",
+  "hook.deny.no_tool_name": "AgentRelay a reçu un appel d'outil sans nom d'outil — refusé.",
+  "hook.deny.blocked": "Bloqué par AgentRelay : {reasons}. C'est un garde que l'utilisateur a configuré pour cette exécution — ne réessayez pas et ne le contournez pas. Choisissez une autre approche ou arrêtez-vous et signalez.",
+  "hook.deny.no_guards": "AgentRelay n'a pas pu charger ses gardes ({err}), cet appel d'outil est donc refusé plutôt qu'exécuté sans protection.",
+
+  "install_hook.already": "Déjà installé, ou {path} n'a pas une forme que nous pouvons modifier en sécurité — rien n'a été changé.",
+  "install_hook.removed": "Le hook AgentRelay a été retiré de {path}.",
+  "install_hook.installed": "Le hook AgentRelay a été installé dans {path}.",
+  "install_hook.installed_detail": "Les gardes BLOQUENT désormais un appel d'outil interdit avant son exécution, au lieu\nd'arrêter l'agent après coup. Vos autres hooks ont été laissés intacts.",
+
+  "fits.go": "Feu vert — une unité d'environ {minutes} minutes tient dans ce qu'il reste de la fenêtre.",
+  "fits.go_blind": "Feu vert, mais à l'aveugle : aucune fenêtre de quota n'a encore été signalée, il n'y a donc\nrien à raisonner. Lancez un tour et le fournisseur nous le dira.",
+  "fits.wait": "Attendez — une unité d'environ {minutes} minutes serait coupée par la fenêtre de quota.",
+  "fits.wait_reopens": "  la fenêtre rouvre : {at}",
+  "fits.wait_minutes": {
+    "one": "  attente :          {count} minute",
+    "other": "  attente :          {count} minutes"
+  },
+  "fits.wait_why": "Être arrêté au milieu d'une unité coûte plus cher qu'attendre : le travail resterait\nà moitié fait, non validé et sans point de restauration.",
+
+  "begin.clean": "L'arbre est propre. Tout ce que l'agent change à partir d'ici lui appartient.",
+  "begin.dirty_intro": {
+    "one": "{count} fichier est déjà non validé et sera laissé intact :",
+    "other": "{count} fichiers sont déjà non validés et seront laissés intacts :"
+  },
+  "begin.and_more": {
+    "one": "  … et {count} de plus",
+    "other": "  … et {count} de plus"
+  },
+  "begin.dirty_note": "Ils ne seront inclus dans aucun point de restauration de l'unité `{unit}`.",
+
+  "done.none": "Aucun validateur configuré (.agentrelay/config.json → validators).",
+  "done.none_detail": "Aucun point de restauration enregistré : sans preuve, il n'y a rien à certifier.",
+  "done.no_evidence": "aucune preuve d'achèvement — l'unité n'est PAS complète",
+  "done.not_checkpointed": "Pas de point de restauration — votre travail est toujours dans l'arbre de travail, non validé.",
+  "done.failed": "les validateurs ont échoué — l'unité n'est PAS complète",
+  "done.checkpointed": {
+    "one": "\nPoint de restauration {sha} ({count} fichier) sur {branch}",
+    "other": "\nPoint de restauration {sha} ({count} fichiers) sur {branch}"
+  },
+  "done.detached_head": "HEAD détachée",
+  "done.left_alone": {
+    "one": "  Laissé intact ({count} fichier que vous aviez déjà changé) : {paths}",
+    "other": "  Laissés intacts ({count} fichiers que vous aviez déjà changés) : {paths}"
+  },
+  "done.undo": "  Annuler cette unité :   {cmd}",
+  "done.rewind": "  Revenir ici plus tard : {cmd}",
+  "done.nothing_to_commit": "\nLes validateurs ont réussi ; rien à enregistrer comme point de restauration (l'arbre était déjà propre).",
+  "done.checkpoint_error": "\nLes validateurs ont réussi, mais le point de restauration n'a pas pu être créé : {err}",
+
+  "report.provenance.verified": "VÉRIFIÉ",
+  "report.provenance.recorded": "ENREGISTRÉ",
+  "report.provenance.estimated": "ESTIMÉ",
+  "report.header": "AgentRelay — rapport nocturne ({mission})\n",
+  "report.nothing": "Rien ne s'est exécuté. Aucune unité terminée, aucun point de restauration créé, et aucun\nvalidateur n'a fait de rapport. Si vous attendiez du travail cette nuit, quelque chose s'est arrêté\navant de commencer — vérifiez `agentrelay status`.\n",
+  "report.line": "  [{tag}] {text}",
+  "report.footer": "\nChaque ligne ci-dessus est étiquetée selon son origine. VÉRIFIÉ signifie qu'une\ncommande s'est exécutée et que son code de sortie l'a décidé. ESTIMÉ est une règle empirique.\nRien que l'agent a simplement affirmé n'apparaît ici.\n",
+  "report.headline.nothing": "AgentRelay : rien ne s'est exécuté cette nuit",
+  "report.headline.failed": {
+    "one": "AgentRelay : {count} unité faite, {failed} EN ÉCHEC — travail laissé non validé pour vous",
+    "other": "AgentRelay : {count} unités faites, {failed} EN ÉCHEC — travail laissé non validé pour vous"
+  },
+  "report.headline.unverified": {
+    "one": "AgentRelay : {count} unité faite, {unverified} NON VÉRIFIÉE — aucun validateur n'a tourné",
+    "other": "AgentRelay : {count} unités faites, {unverified} NON VÉRIFIÉES — aucun validateur n'a tourné"
+  },
+  "report.headline.uncheckpointed": {
+    "one": "AgentRelay : {count} unité a réussi mais {uncheckpointed} n'a AUCUN point de restauration",
+    "other": "AgentRelay : {count} unités ont réussi mais {uncheckpointed} n'ont AUCUN point de restauration"
+  },
+  "report.headline.ok": {
+    "one": "AgentRelay : {count} unité faite, tous les validateurs ont réussi",
+    "other": "AgentRelay : {count} unités faites, tous les validateurs ont réussi"
+  },
+  "report.line.unverified": "{unit} : NON VÉRIFIÉE — aucun validateur n'a tourné, donc rien n'est connu sur cette unité. Ajoutez des validateurs à .agentrelay/config.json",
+  "report.line.checks_passed": {
+    "one": "{unit} : {count} vérification réussie ({names})",
+    "other": "{unit} : {count} vérifications réussies ({names})"
+  },
+  "report.line.uncheckpointed": "{unit} : a réussi mais AUCUN POINT DE RESTAURATION — il n'y a pas de commit où revenir{worktree}",
+  "report.line.worktree_suffix": " (worktree : {path})",
+  "report.line.failed": "{unit} : ÉCHEC — {names} n'a pas réussi. Ce travail n'a PAS été validé ; il est toujours dans votre arbre de travail",
+  "report.line.checkpoint": "point de restauration {sha} ({id}) — `git show {sha}` pour le lire",
+  "report.line.tool_denied": "l'agent a signalé que son appel à {tool} a été refusé et n'a jamais tourné",
+  "report.line.fixloop_gaveup": "la boucle de correction s'est arrêtée et vous a laissé ceci — {reason}",
+  "report.line.drift": "dérive possible par rapport à la tâche — {summary}",
+  "report.line.blocked": "BLOQUÉ par {guard} : l'agent a tenté {reason}{sep}{detail}. Le tour a été arrêté.",
+  "report.line.dirty_files": {
+    "one": "{count} fichier laissé non validé dans l'arbre de travail : {paths}",
+    "other": "{count} fichiers laissés non validés dans l'arbre de travail : {paths}"
+  },
+  "report.line.saved": "~{kb} Ko de contenu de fichiers n'ont pas été renvoyés car les fichiers étaient inchangés (~{tokens} jetons, à environ 4 octets par jeton)",
+
+  "report.notify.pushed": "\n(titre poussé vers votre notificateur)",
+  "report.notify.off": "\n(--notify donné, mais les notifications sont désactivées — définissez `notify` dans .agentrelay/config.json ; rien n'a été envoyé)",
+  "report.notify.failed": "\nla notification a échoué (le rapport ci-dessus reste valable) : {err}",
+
+  "fix.already_green": "Déjà au vert — rien à corriger.",
+  "fix.green_after": {
+    "one": "Au vert après {count} tentative de correction.",
+    "other": "Au vert après {count} tentatives de correction."
+  },
+  "fix.stopped_after": {
+    "one": "Arrêté après {count} tentative.",
+    "other": "Arrêté après {count} tentatives."
+  },
+  "fix.reason": "  {why}",
+  "fix.waiting": "La mission est maintenant en `waiting_input` : elle ne continuera pas d'elle-même.",
+  "fix.still_failing": "les vérifications échouent toujours — une personne est nécessaire",
+
+  "checkpoints.none": "Aucun point de restauration pour l'instant — lancez `agentrelay done \"<ce que l'unité a fait>\"`.",
+  "checkpoints.title": "Points de restauration (les plus récents d'abord) :",
+  "checkpoints.line": "  {sha}  {id}",
+  "checkpoints.hint": "\nPour voir ce qui est venu après l'un d'eux :  git diff --stat <sha> HEAD",
+
+  "serve.listening": "IPC AgentRelay à l'écoute sur http://{addr}",
+  "serve.token": "  jeton écrit dans .agentrelay/ipc.json — GET /status, POST /run, GET /health",
+
+  "state.describe.draft": "pas encore démarrée",
+  "state.describe.running": "en cours",
+  "state.describe.waiting_input": "ARRÊTÉE, elle vous attend — elle ne continuera pas d'elle-même",
+  "state.describe.rate_limited": "quota épuisé ; reprendra à la réouverture de la fenêtre",
+  "state.describe.paused": "mise en pause par vous ; reprenez quand vous êtes prêt",
+  "state.describe.stopping": "arrêt en cours — arrêt des processus et écriture de l'état final",
+  "state.describe.done": "terminée, tous les validateurs ont réussi",
+  "state.describe.failed": "terminée sans s'achever",
+  "state.describe.stopped": "arrêtée parce que vous l'avez demandé",
+  "state.illegal": "impossible de passer de {from} à {to} : {why}",
+  "state.why.terminal": "{from} est final. Une mission terminée ne doit pas redémarrer d'elle-même — démarrez plutôt une nouvelle mission",
+  "state.why.stopping": "un arrêt en cours ne peut que se terminer, pas se transformer en autre chose",
+  "state.why.draft": "une mission ne peut pas revenir à l'état non démarré",
+  "state.why.stopped": "on atteint `stopped` via `stopping`, pour que les processus soient réellement arrêtés d'abord",
+  "state.why.generic": "{to} n'est pas atteignable depuis {from}",
+
+  "cost.describe.none": "Aucun plafond de dépense défini. AgentRelay n'arrêtera pas l'exécution pour cause de coût.",
+  "cost.describe.mission": "Plafond de dépense : ${mission} pour cette mission.",
+  "cost.describe.turn": "Plafond de dépense : ${turn} par tour.",
+  "cost.describe.both": "Plafond de dépense : ${mission} pour cette mission, ${turn} par tour.",
+  "cost.stop.turn_cap": "le prochain tour pourrait coûter environ ${worst}, au-dessus du plafond de ${cap} par tour",
+  "cost.stop.mission_over": "${spent} dépensés, au niveau ou au-dessus du plafond de ${cap} pour cette mission",
+  "cost.stop.mission_would_pass": "${spent} dépensés et le prochain tour pourrait ajouter environ ${worst}, ce qui dépasserait le plafond de ${cap}",
+
+  "isolation.off": "L'isolement est DÉSACTIVÉ. L'agent tourne directement sur cette machine, avec votre réseau et vos fichiers.",
+  "isolation.on": "L'isolement est ACTIVÉ : l'agent tourne dans `{image}`, avec seulement l'espace de travail monté.",
+  "isolation.net_off": "\nRéseau : DÉSACTIVÉ. Rien de ce que l'agent exécute ne peut atteindre internet.",
+  "isolation.net_on": "\nRéseau : ACTIVÉ, limité à {hosts}. NOTE : Docker ne peut pas imposer seul une liste d'hôtes autorisés — cela nécessite un proxy en amont, alors considérez le réseau comme ACTIVÉ tant que vous n'en avez pas un.",
+  "isolation.blocker": "l'isolement est configuré mais Docker n'est pas disponible (non installé, ou le daemon ne tourne pas). Démarrez Docker, ou retirez `isolation.image` pour tourner sans lui — AgentRelay ne tournera pas sans isolement en silence quand vous avez demandé l'isolement.",
+
+  "notify.off": "Les notifications sont DÉSACTIVÉES. Rien ne quitte cette machine.",
+  "notify.on": "Les notifications sont ACTIVÉES. Une courte ligne — un titre et un en-tête comme \"2 unit(s) done, 1 FAILED\" — sera envoyée à {server} sur le sujet \"{topic}\".\nAucun contenu de fichier, diff, prompt, sortie de commande ni chemin n'est jamais envoyé.",
+  "notify.public_warning": "\nNOTE : ntfy.sh est un serveur public géré par quelqu'un d'autre, et quiconque devine le nom de votre sujet peut lire vos notifications. Utilisez un sujet long et aléatoire, ou auto-hébergez et définissez `server` sur votre propre instance.",
+  "notify.title": "AgentRelay",
+
+  "drift.summary.unchecked": "La dérive n'a pas été vérifiée : cette unité n'a pas dit ce qu'elle toucherait.",
+  "drift.summary.clean": "Les changements sont restés dans ce que cette unité a dit qu'elle toucherait.",
+  "drift.summary.header": {
+    "one": "{count} signe que le travail a dérivé de la tâche :",
+    "other": "{count} signes que le travail a dérivé de la tâche :"
+  },
+  "drift.summary.signal": "\n  - {text}",
+  "drift.summary.footer": "\nC'est une heuristique, pas un verdict — le travail n'a pas été arrêté. Lisez le diff avant de vous y fier.",
+  "drift.signal.out_of_scope": "{path} est en dehors de tout ce que cette unité a dit qu'elle toucherait",
+  "drift.signal.too_many_files": {
+    "one": "{count} fichier a changé ; l'unité en attendait au plus {expected}",
+    "other": "{count} fichiers ont changé ; l'unité en attendait au plus {expected}"
+  },
+  "drift.signal.unrelated": "{path} : {why}",
+  "drift.area.ci": "change la façon dont la CI tourne, ce qui ne fait pas d'ordinaire partie d'une tâche de code",
+  "drift.area.dockerfile": "change la façon dont le projet est construit ou livré",
+  "drift.area.compose": "change la façon dont les services sont câblés",
+  "drift.area.env": "touche une configuration qui contient d'ordinaire des secrets",
+  "drift.area.package_json": "change les dépendances ou les scripts",
+  "drift.area.cargo": "change les dépendances",
+  "drift.area.gomod": "change les dépendances",
+  "drift.area.requirements": "change les dépendances",
+  "drift.area.gitignore": "change ce que git suit",
+
+  "fixloop.prompt.header": "Les vérifications de cette unité échouent. Corrigez UNIQUEMENT ce qui est nécessaire pour qu'elles passent.\n\n",
+  "fixloop.prompt.section": "--- {name} a échoué ---\n",
+  "fixloop.prompt.footer": "Ne modifiez pas les tests pour qu'ils passent, ne désactivez pas une vérification, et n'élargissez pas la portée de cette unité. Si l'échec ne peut pas être corrigé sans faire l'une de ces choses, arrêtez-vous et dites-le — cette réponse est plus utile qu'une compilation au vert qui ne signifie rien.",
+  "fixloop.giveup.no_validators": "aucun validateur n'est configuré, il n'y a donc rien vers quoi corriger",
+  "fixloop.giveup.stuck": "la tentative {attempt} a échoué exactement de la même façon que la précédente. L'agent est bloqué au lieu de progresser, et une autre tentative coûtera du quota sans rien changer",
+  "fixloop.giveup.cap": "{max} tentatives de correction n'ont pas fait passer les vérifications. On s'arrête pour qu'une personne puisse regarder, plutôt que d'y passer le reste de la nuit",
+
+  "which.hint.claude": "introuvable dans PATH — installez avec `npm install -g @anthropic-ai/claude-code`, puis ouvrez un nouveau terminal pour que PATH soit rafraîchi",
+  "which.hint.git": "introuvable dans PATH — installez Git et rouvrez votre terminal",
+  "which.hint.node": "introuvable dans PATH — installez Node.js 18 ou plus récent",
+  "which.hint.other": "`{program}` introuvable dans PATH"
+}
