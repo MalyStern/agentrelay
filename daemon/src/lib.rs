@@ -29,6 +29,7 @@ pub mod report;
 pub mod send_gate;
 pub mod validator;
 pub mod which;
+pub mod state;
 pub mod store;
 
 pub use error::{AgentRelayError, ErrorCode, Result};

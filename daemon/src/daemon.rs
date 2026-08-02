@@ -74,6 +74,10 @@ pub struct StatusReport {
     /// In plain words: the spending cap, or that there isn't one.
     pub budget: String,
     pub spent_usd: f64,
+    /// Where the default mission is, and whether it will move on its own.
+    pub state: String,
+    pub state_meaning: String,
+    pub waiting_for_you: bool,
 }
 
 const DIR: &str = ".agentrelay";
@@ -168,6 +172,7 @@ impl Daemon {
     }
 
     pub fn status(&self) -> StatusReport {
+        let st = self.mission_state("default");
         StatusReport {
             db_path: Self::db_path(&self.root).to_string_lossy().into_owned(),
             schema_version: self.store.schema_version(),
@@ -177,6 +182,9 @@ impl Daemon {
             notifications: self.config.notify.describe_privacy(),
             budget: self.config.budget.describe(),
             spent_usd: self.store.total_cost_usd("default"),
+            state: st.as_str().to_string(),
+            state_meaning: st.describe().to_string(),
+            waiting_for_you: st.needs_a_person(),
         }
     }
 
@@ -283,6 +291,37 @@ impl Daemon {
     /// looking like a safe point to return to; checkpointing on evidence means every
     /// commit in the morning is a state that actually built. When the gate fails
     /// nothing is committed — the work stays in the tree, visible and undone.
+    /// Where this mission is. `Draft` when nothing has been recorded yet.
+    pub fn mission_state(&self, mission_id: &str) -> crate::state::MissionState {
+        self.store
+            .latest_state(mission_id)
+            .and_then(|s| crate::state::MissionState::parse(&s))
+            .unwrap_or(crate::state::MissionState::Draft)
+    }
+
+    /// Move the mission, refusing any move the state machine does not allow.
+    ///
+    /// The refusal is the point. Recording an impossible transition would leave the
+    /// state plausible but wrong, and the next process to read it — after a crash,
+    /// hours later — has no way to tell.
+    pub fn transition(
+        &self,
+        mission_id: &str,
+        to: crate::state::MissionState,
+        reason: &str,
+    ) -> Result<crate::state::MissionState> {
+        let from = self.mission_state(mission_id);
+        crate::state::check(from, to).map_err(|e| {
+            AgentRelayError::new(ErrorCode::Internal, e.to_string())
+        })?;
+        if from != to {
+            self.store
+                .record_transition(mission_id, Some(from.as_str()), to.as_str(), Some(reason))
+                .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
+        }
+        Ok(to)
+    }
+
     /// Should a unit of roughly this length be started now, or would it be cut off
     /// by the quota window closing?
     ///
@@ -802,6 +841,63 @@ mod tests {
         assert!(!d.config().budget.is_set());
         assert!(d.status().budget.contains("No spending cap is set"), "{}", d.status().budget);
         assert!(d.check_budget("m1").may_proceed());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stopped_mission_cannot_be_restarted_by_a_daemon_that_comes_back_later() {
+        use crate::state::MissionState::*;
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        {
+            let d = Daemon::open(&root).unwrap();
+            assert_eq!(d.mission_state("m1"), Draft, "nothing recorded yet");
+            d.transition("m1", Running, "night started").unwrap();
+            d.transition("m1", Stopping, "user asked to stop").unwrap();
+            d.transition("m1", Stopped, "processes killed").unwrap();
+        }
+
+        // A fresh process — the crash-restart case — must not pick it back up.
+        let d = Daemon::open(&root).unwrap();
+        assert_eq!(d.mission_state("m1"), Stopped, "the state survived the restart");
+        let err = d.transition("m1", Running, "resuming after restart").unwrap_err().to_string();
+        assert!(err.contains("final"), "{err}");
+        assert!(err.contains("start a new mission"), "{err}");
+        assert_eq!(d.mission_state("m1"), Stopped, "and the refusal did not move it");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_illegal_transition_is_refused_rather_than_recorded() {
+        use crate::state::MissionState::*;
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        d.transition("m1", Running, "started").unwrap();
+
+        // Straight to `stopped` would claim processes were killed when nothing was.
+        assert!(d.transition("m1", Stopped, "shortcut").is_err());
+        assert_eq!(d.mission_state("m1"), Running, "state unchanged by a refusal");
+
+        // The legal route works and is recorded.
+        d.transition("m1", Stopping, "stop requested").unwrap();
+        assert_eq!(d.mission_state("m1"), Stopping);
+        assert_eq!(d.store().get_transitions("m1").unwrap().len(), 2);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn re_declaring_the_current_state_does_not_pile_up_rows() {
+        use crate::state::MissionState::*;
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        d.transition("m1", Running, "started").unwrap();
+        d.transition("m1", Running, "still running").unwrap();
+        d.transition("m1", Running, "still running").unwrap();
+        assert_eq!(d.store().get_transitions("m1").unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -136,6 +136,10 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!("  missions:    {}", s.missions);
             println!("  engine:      {}", s.program);
             println!("  keep-awake:  {}", s.keep_awake);
+            println!("  state:       {} — {}", s.state, s.state_meaning);
+            if s.waiting_for_you {
+                println!("               ^ nothing will happen until you act.");
+            }
             println!();
             println!("{}", s.notifications);
             println!();

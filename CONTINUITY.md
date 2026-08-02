@@ -253,6 +253,23 @@ never sleeps again). The request now lives on a dedicated thread and Drop joins 
 NEXT (Phase-2): Mission-Contract state machine, Isolation-Ring (container +
 egress allowlist), CI loop. Remaining audit item: none open that reproduce.
 
+MISSION STATE MACHINE (2026-08-02): state.rs + Daemon::transition/mission_state,
+persisted in state_transitions so a process that was not there when the run
+started can still tell where it is. Enforced properties: terminal is terminal (a
+crash-restart cannot resume a mission the human stopped - the failure that makes
+people distrust automation); `stopped` is only reachable through `stopping`, so
+the record cannot claim processes were killed when nothing was; an illegal move is
+REFUSED, never recorded (a plausible-but-wrong state is worse than a crash);
+re-declaring the current state is a no-op, not an error. needs_a_person() is
+deliberately narrower than !resumes_itself(): `stopping` moves on its own, and
+telling the user to act when the answer is 'wait' trains them to ignore the
+message. state_for_foreign_head implements the plan's rule - a HEAD commit that is
+not ours means someone else worked here, so stop and ask instead of building on
+changes the agent has never seen. Surfaced in `status`. 178 cargo tests.
+
+NEXT (Phase-2): Isolation-Ring (container + egress allowlist) - needs Docker,
+check availability first; VCS/CI loop.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

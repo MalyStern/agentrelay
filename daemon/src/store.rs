@@ -225,6 +225,20 @@ impl Store {
         Ok(())
     }
 
+    /// The state this mission was last recorded in, or None if it has never moved.
+    pub fn latest_state(&self, mission_id: &str) -> Option<String> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT to_state FROM state_transitions WHERE mission_id = ?1
+                 ORDER BY id DESC LIMIT 1",
+                params![mission_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+    }
+
     pub fn get_transitions(&self, mission_id: &str) -> rusqlite::Result<Vec<(Option<String>, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
