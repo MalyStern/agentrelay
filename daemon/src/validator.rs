@@ -67,10 +67,18 @@ pub struct ValidationResult {
 
 fn truncate(s: String, max: usize) -> String {
     if s.len() <= max {
-        s
-    } else {
-        format!("{}… [+{} bytes]", &s[..max], s.len() - max)
+        return s;
     }
+    // Slicing a String by byte index panics when it lands mid-character, and
+    // command output is full of multi-byte characters: tsc prints ’, vitest prints
+    // ✓, and any non-Latin path is multi-byte throughout. That panic would kill the
+    // run inside complete_unit — no checkpoint, no report — so walk back to the
+    // nearest character boundary instead.
+    let mut cut = max;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}… [+{} bytes]", &s[..cut], s.len() - cut)
 }
 
 async fn run_shell(command: &str, cwd: &str) -> std::io::Result<std::process::Output> {

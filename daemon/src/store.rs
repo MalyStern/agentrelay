@@ -355,6 +355,31 @@ impl Store {
         Ok(())
     }
 
+    /// Remember which paths were already dirty when a unit started — the user's own
+    /// uncommitted work, which the supervisor must never commit on their behalf.
+    pub fn save_unit_baseline(&self, mission_id: &str, unit_id: &str, paths: &[String]) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![
+                format!("baseline:{mission_id}:{unit_id}"),
+                serde_json::to_string(paths).unwrap_or_else(|_| "[]".into())
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// `None` means no baseline was recorded — which is NOT the same as "the tree
+    /// was clean", and callers must treat the difference as significant.
+    pub fn get_unit_baseline(&self, mission_id: &str, unit_id: &str) -> Option<Vec<String>> {
+        let r: rusqlite::Result<String> = self.conn.lock().unwrap().query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![format!("baseline:{mission_id}:{unit_id}")],
+            |r| r.get(0),
+        );
+        r.ok().and_then(|v| serde_json::from_str(&v).ok())
+    }
+
     /// Running total of bytes NOT re-sent because a file was unchanged. Counted at
     /// the moment each skip happens — the only way this number can be true.
     pub fn add_saved_bytes(&self, mission_id: &str, n: usize) -> rusqlite::Result<()> {

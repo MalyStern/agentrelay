@@ -48,6 +48,12 @@ pub struct MorningReport {
     pub units_completed: usize,
     /// Units where a validator failed — work left in the tree for the human.
     pub units_failed: usize,
+    /// Units nobody checked. Deliberately NOT counted as completed: "nobody proved
+    /// it works" and "it works" are different states, and conflating them is how a
+    /// report ends up reassuring in a night that went wrong.
+    pub units_unverified: usize,
+    /// Units that passed but produced no restore point.
+    pub units_uncheckpointed: usize,
     pub checkpoints: Vec<(String, String)>,
     /// True when there is nothing at all to report — said plainly rather than
     /// dressed up as a successful quiet night.
@@ -55,6 +61,12 @@ pub struct MorningReport {
 }
 
 impl MorningReport {
+    /// True when a person should look. The exit code and the notification urgency
+    /// both come from here, so they can never disagree.
+    pub fn needs_attention(&self) -> bool {
+        self.units_failed > 0 || self.units_unverified > 0 || self.units_uncheckpointed > 0
+    }
+
     /// Plain text, for a terminal or a push notification.
     pub fn render(&self) -> String {
         let mut out = format!("AgentRelay — overnight report ({})\n\n", self.mission_id);
@@ -81,16 +93,24 @@ impl MorningReport {
             return "AgentRelay: nothing ran overnight".to_string();
         }
         if self.units_failed > 0 {
-            format!(
+            return format!(
                 "AgentRelay: {} unit(s) done, {} FAILED — work left uncommitted for you",
                 self.units_completed, self.units_failed
-            )
-        } else {
-            format!(
-                "AgentRelay: {} unit(s) done, all validators passed",
-                self.units_completed
-            )
+            );
         }
+        if self.units_unverified > 0 {
+            return format!(
+                "AgentRelay: {} unit(s) done, {} NOT VERIFIED — no validators ran",
+                self.units_completed, self.units_unverified
+            );
+        }
+        if self.units_uncheckpointed > 0 {
+            return format!(
+                "AgentRelay: {} unit(s) passed but {} has NO restore point",
+                self.units_completed, self.units_uncheckpointed
+            );
+        }
+        format!("AgentRelay: {} unit(s) done, all validators passed", self.units_completed)
     }
 }
 
@@ -104,9 +124,24 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
 
     let mut completed = 0usize;
     let mut failed = 0usize;
+    let mut unverified = 0usize;
+    let mut uncheckpointed = 0usize;
     for u in &units {
         let validations = store.get_validations(&u.id).unwrap_or_default();
         if validations.is_empty() {
+            // A unit nobody checked is not a unit that passed. Skipping it here was
+            // how a night with no validators configured — the DEFAULT config — came
+            // out as "all validators passed", exit 0, and a script that decided not
+            // to wake anyone.
+            unverified += 1;
+            lines.push(Line {
+                provenance: Provenance::Recorded,
+                text: format!(
+                    "{}: NOT VERIFIED — no validators ran, so nothing about this unit is known. \
+                     Add validators to .agentrelay/config.json",
+                    u.id
+                ),
+            });
             continue;
         }
         let all_passed = validations.iter().all(|(_, passed)| *passed);
@@ -121,6 +156,22 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
                     validations.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
                 ),
             });
+            // Passing is only half of it. A unit with no checkpoint has no restore
+            // point, so "done" would be a promise the morning cannot keep.
+            if !checkpoints.iter().any(|(_, id)| id == &u.id) {
+                uncheckpointed += 1;
+                lines.push(Line {
+                    provenance: Provenance::Recorded,
+                    text: format!(
+                        "{}: passed but WAS NOT CHECKPOINTED — there is no commit to go back to{}",
+                        u.id,
+                        u.worktree_path
+                            .as_deref()
+                            .map(|p| format!(" (worktree: {p})"))
+                            .unwrap_or_default()
+                    ),
+                });
+            }
         } else {
             failed += 1;
             let broken: Vec<&str> =
@@ -175,6 +226,8 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
         lines,
         units_completed: completed,
         units_failed: failed,
+        units_unverified: unverified,
+        units_uncheckpointed: uncheckpointed,
         checkpoints,
         nothing_happened,
     }
@@ -273,7 +326,11 @@ mod tests {
         assert_eq!(r.units_completed, 1);
         assert_eq!(r.lines[0].provenance, Provenance::Verified);
         assert!(r.render().contains("[VERIFIED]"));
-        assert!(r.headline().contains("all validators passed"));
+        // Passing is not the whole story: this unit produced no checkpoint, so the
+        // report says there is nothing to go back to rather than calling it done.
+        assert_eq!(r.units_uncheckpointed, 1);
+        assert!(r.headline().contains("NO restore point"), "{}", r.headline());
+        assert!(r.needs_attention());
         let _ = std::fs::remove_dir_all(&cwd);
     }
 

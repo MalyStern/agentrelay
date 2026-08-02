@@ -107,7 +107,11 @@ pub fn evaluate_send_gate(prompt: &ScheduledPrompt, ctx: &SendContext) -> SendVe
     if !is_trigger_due(&prompt.trigger, ctx) {
         return SendVerdict::NotDue;
     }
-    if prompt.condition.is_some() && ctx.condition_result == Some(false) {
+    // `!= Some(true)`, not `== Some(false)`: a condition that exists but was never
+    // evaluated leaves `None`, and treating that as "send" means the gate opens
+    // precisely when we failed to check it. The rest of this module fails closed;
+    // this line used not to.
+    if prompt.condition.is_some() && ctx.condition_result != Some(true) {
         return SendVerdict::ConditionUnmet;
     }
     SendVerdict::Send

@@ -94,11 +94,89 @@ pub fn is_clean(cwd: &str) -> Result<bool> {
     Ok(dirty_paths(cwd)?.is_empty())
 }
 
-/// Commit whatever the agent changed, as a checkpoint.
+/// Commit **only the listed paths** as a checkpoint.
 ///
-/// Returns `created: false` when the tree was already clean — a turn that changed
-/// nothing must not leave an empty commit behind, or the history stops meaning
-/// "here is a point work actually reached".
+/// The path list is the whole safety property. An earlier version staged with
+/// `git add --all`, which cannot tell the agent's work from the user's: if you
+/// edited a file, went to bed, and the agent touched something unrelated, your
+/// edit was swept into the agent's commit — and the "undo this unit" command
+/// printed next to it would then delete your work. Committing an explicit list
+/// means a checkpoint can only ever contain what the supervisor knows the agent
+/// produced.
+pub fn create_paths(cwd: &str, id: &str, summary: &str, paths: &[String]) -> Result<Checkpoint> {
+    if !is_repo(cwd) {
+        return Err(AgentRelayError::new(
+            ErrorCode::Internal,
+            format!("{cwd} is not a git repository — checkpoints need one"),
+        ));
+    }
+    if paths.is_empty() {
+        return Ok(Checkpoint {
+            id: id.to_string(),
+            head: head(cwd).unwrap_or_default(),
+            branch: branch(cwd),
+            created: false,
+            files_changed: 0,
+        });
+    }
+
+    // `--` separates paths from revisions: a file called `main` must not be read
+    // as a branch name.
+    let mut args: Vec<&str> = vec!["add", "--"];
+    args.extend(paths.iter().map(|s| s.as_str()));
+    git(cwd, &args)?;
+
+    // Staging a path that is unchanged is a no-op, so re-check rather than assume
+    // the list implies something to commit.
+    let staged = git(cwd, &["diff", "--cached", "--name-only"])?;
+    if staged.trim().is_empty() {
+        return Ok(Checkpoint {
+            id: id.to_string(),
+            head: head(cwd).unwrap_or_default(),
+            branch: branch(cwd),
+            created: false,
+            files_changed: 0,
+        });
+    }
+    let files_changed = staged.lines().filter(|l| !l.trim().is_empty()).count();
+
+    commit_staged(cwd, id, summary)?;
+
+    Ok(Checkpoint {
+        id: id.to_string(),
+        head: head(cwd).unwrap_or_default(),
+        branch: branch(cwd),
+        created: true,
+        files_changed,
+    })
+}
+
+fn commit_staged(cwd: &str, id: &str, summary: &str) -> Result<()> {
+    // `-c user.…` rather than `git config`: we set the identity for this one commit
+    // and never write to the user's repo config.
+    let message = format!("{summary}\n\n{CHECKPOINT_TRAILER} {id}\n");
+    git(
+        cwd,
+        &[
+            "-c",
+            &format!("user.name={CHECKPOINT_AUTHOR_NAME}"),
+            "-c",
+            &format!("user.email={CHECKPOINT_AUTHOR_EMAIL}"),
+            "commit",
+            "--no-verify",
+            "-q",
+            "-m",
+            &message,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Commit everything currently dirty.
+///
+/// Only correct when the caller knows the whole tree is the agent's doing — which
+/// in practice means the tree was clean when the unit started. `Daemon` works that
+/// out from a recorded baseline; prefer `create_paths`.
 pub fn create(cwd: &str, id: &str, summary: &str) -> Result<Checkpoint> {
     if !is_repo(cwd) {
         return Err(AgentRelayError::new(
@@ -118,24 +196,7 @@ pub fn create(cwd: &str, id: &str, summary: &str) -> Result<Checkpoint> {
     }
 
     git(cwd, &["add", "--all"])?;
-
-    // `-c user.…` rather than `git config`: we set the identity for this one commit
-    // and never write to the user's repo config.
-    let message = format!("{summary}\n\n{CHECKPOINT_TRAILER} {id}\n");
-    git(
-        cwd,
-        &[
-            "-c",
-            &format!("user.name={CHECKPOINT_AUTHOR_NAME}"),
-            "-c",
-            &format!("user.email={CHECKPOINT_AUTHOR_EMAIL}"),
-            "commit",
-            "--no-verify",
-            "-q",
-            "-m",
-            &message,
-        ],
-    )?;
+    commit_staged(cwd, id, summary)?;
 
     Ok(Checkpoint {
         id: id.to_string(),
@@ -182,17 +243,23 @@ pub fn diff_stat_since(cwd: &str, rev: &str) -> Result<String> {
     git(cwd, &["diff", "--stat", rev, "HEAD"])
 }
 
-/// The command that rewinds to `rev`, discarding everything committed after it.
-/// We return these as text and never run them: discarding a night's work is the
-/// user's call, and a supervisor that can reset the tree can also destroy it.
+// `--keep`, never `--hard`. `--hard` discards uncommitted changes to tracked files
+// whether or not they are part of the commit being undone — so even a checkpoint
+// that correctly contains only the agent's work would take the user's unsaved edits
+// with it. `--keep` does the same rewind but ABORTS if that would lose local
+// changes, which is the behaviour you want from a command printed by a tool that
+// ran while you were asleep. We return these as text and never run them: discarding
+// work is the user's call.
+
+/// Rewind to `rev`, dropping everything committed after it.
 pub fn rewind_command(rev: &str) -> String {
-    format!("git reset --hard {rev}   # discards every change made AFTER this checkpoint")
+    format!("git reset --keep {rev}   # drops commits made AFTER this checkpoint; refuses if that would lose uncommitted work")
 }
 
-/// The command that undoes `rev` itself — the one you want right after a
-/// checkpoint, when `reset --hard <that same sha>` would be a no-op.
+/// Undo `rev` itself — what you want right after a checkpoint, where resetting to
+/// that same sha would be a no-op.
 pub fn undo_command(rev: &str) -> String {
-    format!("git reset --hard {rev}~1   # discards this unit's work too")
+    format!("git reset --keep {rev}~1   # also undoes this unit; refuses if that would lose uncommitted work")
 }
 
 #[cfg(test)]
@@ -338,10 +405,13 @@ mod tests {
     #[test]
     fn undo_is_offered_never_executed() {
         // The supervisor hands back the command; running it is the user's decision.
-        assert!(rewind_command("abc1234").starts_with("git reset --hard abc1234 "));
+        assert!(rewind_command("abc1234").starts_with("git reset --keep abc1234 "));
         // Undoing the checkpoint itself needs its parent — resetting to the sha we
         // just committed would be a no-op, which is the opposite of what "undo" means.
-        assert!(undo_command("abc1234").starts_with("git reset --hard abc1234~1"));
+        assert!(undo_command("abc1234").starts_with("git reset --keep abc1234~1"));
+        // --hard would discard uncommitted work that was never part of the commit.
+        assert!(!undo_command("abc1234").contains("--hard"));
+        assert!(!rewind_command("abc1234").contains("--hard"));
     }
 
     #[test]
@@ -353,7 +423,7 @@ mod tests {
         let cp = create(&p, "c1", "unit 1").unwrap();
         assert!(std::path::Path::new(&p).join("unit.txt").exists());
 
-        git(&p, &["reset", "--hard", &format!("{}~1", cp.head)]).unwrap();
+        git(&p, &["reset", "--keep", &format!("{}~1", cp.head)]).unwrap();
         assert_eq!(head(&p).unwrap(), before, "back to before the unit");
         assert!(!std::path::Path::new(&p).join("unit.txt").exists());
         cleanup(&p);

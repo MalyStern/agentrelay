@@ -15,6 +15,11 @@ pub enum ProposedAction {
     Write { path: String },
     Command { command: String },
     Network { target: Option<String> },
+    /// A tool that can write or run things, whose arguments we could not read.
+    /// Exists so that "we don't understand this" has a representation — without it
+    /// an unparsed write tool produced an empty action list, and an empty list is
+    /// indistinguishable from "nothing dangerous was proposed".
+    Unknown { tool: String, detail: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -41,7 +46,11 @@ pub struct Norm {
 pub fn norm_path(input: &str) -> Norm {
     let p = input.replace('\\', "/");
     let b = p.as_bytes();
-    let has_drive = p.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'/';
+    // `C:secret.txt` — no slash — is Windows' "relative to drive C's current
+    // directory". Requiring the slash classified it as a relative path, and relative
+    // paths are auto-approved, so it slipped straight past the workspace boundary
+    // onto another drive. A drive letter makes it drive-anchored either way.
+    let has_drive = p.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
     let (drive, rest) = if has_drive {
         (
             format!("{}:", (b[0] as char).to_ascii_lowercase()),
@@ -83,7 +92,11 @@ pub fn norm_path(input: &str) -> Norm {
 
 // ── tiny glob (**, *, ?) -> Regex against POSIX paths ──────────────────────────
 pub fn glob_to_regex(glob: &str) -> Regex {
-    let mut re = String::from("^");
+    // Case-insensitive on purpose. Windows and macOS treat `.ENV` and `.env` as the
+    // same file, so a case-sensitive match on a FORBIDDEN path is a hole: the agent
+    // writes `.ENV`, the guard sees no match, and the user's secrets are overwritten
+    // anyway. A forbid-list that is slightly too broad is the safe direction to err.
+    let mut re = String::from("(?i)^");
     let chars: Vec<char> = glob.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -132,23 +145,39 @@ static RE_SHELL_TOOL: Lazy<Regex> =
 static RE_NET_TOOL: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)^(WebFetch|WebSearch|fetch|http_request)$").unwrap());
 
+// `env` is deliberately NOT here: `env rm -rf src` is a write wearing a read-only
+// name, and the same goes for any launcher that takes a command as an argument.
 const READONLY_BINS: &[&str] = &[
     "ls", "cat", "head", "tail", "pwd", "echo", "printf", "grep", "egrep", "rg", "wc", "stat", "file",
-    "which", "type", "env", "printenv", "date", "whoami", "uname", "true", "basename", "dirname",
+    "which", "type", "printenv", "date", "whoami", "uname", "true", "basename", "dirname",
     "realpath", "sort", "uniq", "cut", "diff", "tree", "du", "df",
 ];
+
+// Only git verbs that cannot change a ref, the worktree, or the user's config.
+// `branch` (`-D` deletes commits), `stash` (empties the worktree) and `config`
+// (writes to the user's file) were here and are not read-only in any useful sense.
 const GIT_READONLY: &[&str] = &[
-    "status", "log", "diff", "show", "branch", "rev-parse", "ls-files", "remote", "describe", "blame",
-    "cat-file", "config", "tag", "stash",
+    "status", "log", "diff", "show", "rev-parse", "ls-files", "remote", "describe", "blame",
+    "cat-file",
 ];
 
 /// True only if EVERY sub-command is a pure inspection with no side effect.
+///
+/// Fails closed: anything this cannot confidently classify is not read-only.
 pub fn is_read_only_command(command: &str) -> bool {
     if command.contains('>') {
         return false; // any redirection writes
     }
+    // Command substitution hides an arbitrary command inside what looks like an
+    // argument — `echo $(rm -rf src)` would otherwise be classified by its `echo`.
+    if command.contains("$(") || command.contains('`') || command.contains("${") {
+        return false;
+    }
+    // A NEWLINE separates commands exactly like `;` does, and multi-line scripts are
+    // the normal thing a coding agent emits. Omitting it here meant "ls\nrm -rf src"
+    // was judged solely on its first word and allowed.
     let parts: Vec<&str> = command
-        .split(|c| c == ';' || c == '|' || c == '&')
+        .split(|c| c == ';' || c == '|' || c == '&' || c == '\n' || c == '\r')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
@@ -163,7 +192,10 @@ pub fn is_read_only_command(command: &str) -> bool {
             .unwrap_or("");
         if bin == "git" {
             let sub = toks.get(1).copied().unwrap_or("");
-            GIT_READONLY.contains(&sub) && !part.contains("-i") && !part.contains("--interactive")
+            // Match `-i` as its own token: `part.contains("-i")` also matched
+            // `--ignore-all-space`, blocking a perfectly ordinary `git diff`.
+            let interactive = toks.iter().any(|t| *t == "-i" || *t == "--interactive");
+            GIT_READONLY.contains(&sub) && !interactive
         } else if bin == "find" {
             !Regex::new(r"-(?:delete|exec|execdir|fprint|fprintf)\b")
                 .unwrap()
@@ -198,6 +230,19 @@ pub fn derive_actions(tool: &str, args: &Value) -> Vec<ProposedAction> {
     if RE_NET_TOOL.is_match(tool) {
         return vec![ProposedAction::Network {
             target: get("url"),
+        }];
+    }
+
+    // A write or shell tool whose arguments we could not read is the dangerous
+    // case, not a harmless one: `apply_patch` carries its paths inside the patch
+    // body, and a provider that names its argument `file` instead of `file_path`
+    // would produce zero actions — and zero actions evaluates to "allow". Emit an
+    // Unknown action so the guards get something to refuse.
+    if RE_WRITE_TOOL.is_match(tool) || RE_SHELL_TOOL.is_match(tool) {
+        return vec![ProposedAction::Unknown {
+            tool: tool.to_string(),
+            detail: "arguments not in a recognised shape — cannot tell what this would touch"
+                .to_string(),
         }];
     }
     vec![]
@@ -252,6 +297,12 @@ fn violation(guard: &Guard, action: &ProposedAction, detail: Option<String>) -> 
 
 fn check_action(action: &ProposedAction, guard: &Guard, cwd: &str) -> Option<GuardViolation> {
     use GuardKind::*;
+    // An action we could not parse is refused by EVERY guard. A supervisor that
+    // permits what it does not understand is not a supervisor — and the parse
+    // failure is exactly the case an attacker or an unfamiliar provider produces.
+    if let ProposedAction::Unknown { tool, detail } = action {
+        return Some(violation(guard, action, Some(format!("{tool}: {detail}"))));
+    }
     match guard.kind {
         NoPush => match action {
             ProposedAction::Command { command } if RE_PUSH.is_match(command) => Some(violation(guard, action, None)),
@@ -296,6 +347,8 @@ fn check_action(action: &ProposedAction, guard: &Guard, cwd: &str) -> Option<Gua
                     Some(violation(guard, action, Some(command.clone())))
                 }
             }
+            // Handled above, before the per-guard match.
+            ProposedAction::Unknown { .. } => None,
         },
         WorkspaceBoundary => match action {
             ProposedAction::Write { path } if !inside_workspace(path, cwd) => {
@@ -367,6 +420,73 @@ mod tests {
     }
     fn g(kind: GuardKind) -> Vec<Guard> {
         vec![Guard::new(kind)]
+    }
+
+    #[test]
+    fn read_only_is_not_fooled_by_a_newline_or_a_launcher_or_substitution() {
+        // Each of these was ALLOWED. A coding agent emits multi-line shell scripts
+        // constantly, so the newline case is the common one, not the exotic one.
+        for cmd in [
+            "ls
+rm -rf src",
+            "ls -la
+git reset --hard HEAD~5",
+            "echo $(rm -rf src)",
+            "echo `rm -rf src`",
+            "env rm -rf src",
+            "git branch -D main",
+            "git stash",
+            "git config user.email attacker@example.com",
+        ] {
+            assert!(!is_read_only_command(cmd), "still allowed: {cmd}");
+            assert!(!evaluate_guards(&c(cmd), &g(GuardKind::ReadOnly), CWD).allow, "{cmd}");
+        }
+        // …while genuinely read-only commands still pass, including the one the
+        // old `-i` substring check wrongly blocked.
+        for cmd in ["ls -la", "git diff --ignore-all-space", "cat a.txt | grep x", "git log -5"] {
+            assert!(is_read_only_command(cmd), "wrongly blocked: {cmd}");
+        }
+    }
+
+    #[test]
+    fn a_tool_we_cannot_parse_is_refused_by_every_guard() {
+        // Zero actions used to mean "nothing dangerous proposed", so an unfamiliar
+        // argument shape sailed through. apply_patch carries its paths inside the
+        // patch body and hit this exact hole.
+        for (tool, args) in [
+            ("apply_patch", json!({"patch": "*** Update File: /etc/passwd"})),
+            ("Write", json!({"file": "/etc/passwd"})),
+            ("Bash", json!({"commands": ["rm -rf /"]})),
+        ] {
+            for kind in [GuardKind::WorkspaceBoundary, GuardKind::ReadOnly, GuardKind::NoPush] {
+                let d = evaluate_tool_pre(tool, &args, &g(kind), CWD);
+                assert!(!d.allow, "{tool} allowed under {kind:?}");
+            }
+        }
+        // A tool that is neither a writer nor a shell is still not our business.
+        assert!(evaluate_tool_pre("SomeReadTool", &json!({}), &g(GuardKind::ReadOnly), CWD).allow);
+    }
+
+    #[test]
+    fn forbidden_paths_match_regardless_of_case() {
+        // Windows and macOS treat .ENV and .env as one file, so a case-sensitive
+        // forbid-list is not a forbid-list at all.
+        let gs = vec![Guard::with_spec(
+            GuardKind::ForbidPath,
+            json!([".env", "**/*.pem"]),
+        )];
+        for p in [".env", ".ENV", ".Env", "keys/server.PEM"] {
+            assert!(!evaluate_guards(&w(p), &gs, CWD).allow, "not blocked: {p}");
+        }
+    }
+
+    #[test]
+    fn a_windows_drive_relative_path_does_not_escape_the_workspace() {
+        // `C:secret.txt` means "relative to drive C's current directory". Demanding
+        // a slash classified it as relative, and relative paths were auto-approved.
+        let n = norm_path("C:secret.txt");
+        assert!(n.absolute, "a drive letter anchors the path");
+        assert!(!evaluate_guards(&w("D:evil.txt"), &g(GuardKind::WorkspaceBoundary), CWD).allow);
     }
 
     #[test]

@@ -23,6 +23,25 @@ pub fn looks_like_rate_limit(text: &str) -> bool {
     RE_RATE_LIMIT.is_match(text)
 }
 
+/// Providers word the reset time differently and sometimes omit it entirely, so
+/// this pulls out an RFC-3339 timestamp or a unix epoch if one is present and
+/// returns None otherwise. An absent reset is not an error: the quota layer already
+/// falls back to a conservative wait, and inventing a time would be worse than
+/// admitting we do not know one.
+pub fn parse_reset_at(text: &str) -> Option<String> {
+    static RE_RFC3339: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?")
+            .unwrap()
+    });
+    if let Some(m) = RE_RFC3339.find(text) {
+        return Some(m.as_str().to_string());
+    }
+    // e.g. "resets at 1735689600" — a bare 10-digit epoch in a plausible range.
+    static RE_EPOCH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(1[6-9]\d{8}|2[0-9]\d{8})\b").unwrap());
+    let secs: i64 = RE_EPOCH.find(text)?.as_str().parse().ok()?;
+    chrono::DateTime::from_timestamp(secs, 0).map(|d| d.to_rfc3339())
+}
+
 fn u64_of(v: &Value, key: &str) -> Option<u64> {
     v.get(key).and_then(|x| x.as_u64())
 }
@@ -107,6 +126,21 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
                 .collect::<Vec<_>>()
                 .join(" ");
             if is_error && looks_like_rate_limit(&text) {
+                // Emit RateLimited, not just Error. The entire quota layer —
+                // QuotaTracker::interpret_event, the resume plan, the wait until the
+                // window reopens — matches on AgentEvent::RateLimited, and nothing
+                // outside tests was constructing one. Detection worked and then went
+                // nowhere: the run simply ended, with no resume and no explanation.
+                // This is the single line that connects "we hit the quota" to
+                // "come back when it resets", which is the product's whole reason to
+                // exist.
+                out.events.push(AgentEvent::RateLimited {
+                    reset_at: parse_reset_at(&text).unwrap_or_default(),
+                    window: None,
+                    provider: Some("claude".into()),
+                });
+                // The Error is kept as well so the timeline still shows what the
+                // provider actually said.
                 out.events.push(AgentEvent::Error {
                     message: if text.trim().is_empty() { "rate limited".into() } else { text },
                     code: Some("quota.rate_limited".into()),
@@ -218,9 +252,73 @@ mod tests {
     #[test]
     fn result_rate_limit_and_generic_error() {
         let r = parse_claude_line(&json!({"type":"result","subtype":"error_during_execution","is_error":true,"result":"You have hit the usage limit"}));
-        assert!(matches!(&r.events[0], AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited"));
+        // A rate limit now yields BOTH: the RateLimited the quota layer acts on,
+        // and the Error the timeline shows.
+        assert!(r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+        assert!(r.events.iter().any(
+            |e| matches!(e, AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited")));
         let r2 = parse_claude_line(&json!({"type":"result","is_error":true,"error":"boom"}));
         assert!(matches!(&r2.events[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error"));
+    }
+
+    #[test]
+    fn a_real_rate_limit_result_emits_the_event_the_quota_layer_listens_for() {
+        // The bug this pins: the parser emitted only Error{code:"quota.rate_limited"},
+        // while every consumer — QuotaTracker, the resume plan, the wait — matches
+        // on AgentEvent::RateLimited. Detection worked and led nowhere, so a real
+        // night just stopped at the quota and never came back.
+        let r = parse_claude_line(&json!({
+            "type": "result",
+            "is_error": true,
+            "subtype": "error_rate_limit",
+            "error": "rate limit exceeded, resets at 2026-08-03T04:00:00Z"
+        }));
+        assert!(
+            r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })),
+            "no RateLimited emitted: {:?}",
+            r.events
+        );
+        match r.events.iter().find(|e| matches!(e, AgentEvent::RateLimited { .. })) {
+            Some(AgentEvent::RateLimited { reset_at, provider, .. }) => {
+                assert_eq!(reset_at, "2026-08-03T04:00:00Z", "the reset time is carried through");
+                assert_eq!(provider.as_deref(), Some("claude"));
+            }
+            _ => unreachable!(),
+        }
+        // The provider's own words survive too, for the timeline.
+        assert!(r.events.iter().any(
+            |e| matches!(e, AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited")
+        ));
+    }
+
+    #[test]
+    fn a_rate_limit_without_a_reset_time_still_emits_the_event() {
+        // Not knowing when the window reopens is normal; the quota layer has a
+        // conservative fallback. Dropping the event because a field is missing
+        // would turn a recoverable pause into a dead run.
+        let r = parse_claude_line(&json!({"type":"result","is_error":true,"error":"429 too many requests"}));
+        match r.events.iter().find(|e| matches!(e, AgentEvent::RateLimited { .. })) {
+            Some(AgentEvent::RateLimited { reset_at, .. }) => assert!(reset_at.is_empty()),
+            _ => panic!("expected RateLimited: {:?}", r.events),
+        }
+    }
+
+    #[test]
+    fn an_ordinary_error_is_not_mistaken_for_a_rate_limit() {
+        let r = parse_claude_line(&json!({"type":"result","is_error":true,"error":"compile failed"}));
+        assert!(!r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+    }
+
+    #[test]
+    fn reset_times_are_parsed_from_the_shapes_providers_actually_use() {
+        assert_eq!(
+            parse_reset_at("try again after 2026-08-03T04:00:00Z").as_deref(),
+            Some("2026-08-03T04:00:00Z")
+        );
+        assert!(parse_reset_at("resets at 1893456000").is_some(), "unix epoch");
+        assert_eq!(parse_reset_at("rate limited, try later"), None);
+        // A version number must not be read as a timestamp.
+        assert_eq!(parse_reset_at("rate limit in v1.2.3"), None);
     }
 
     #[test]

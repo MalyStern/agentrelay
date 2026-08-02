@@ -250,6 +250,20 @@ impl Daemon {
     /// looking like a safe point to return to; checkpointing on evidence means every
     /// commit in the morning is a state that actually built. When the gate fails
     /// nothing is committed — the work stays in the tree, visible and undone.
+    /// Record what the working tree looked like BEFORE the agent starts a unit.
+    ///
+    /// Everything already uncommitted at this moment belongs to the human. Without
+    /// this snapshot the supervisor cannot tell their work from the agent's, and a
+    /// checkpoint would sweep in an unrelated edit the user left open — which the
+    /// "undo this unit" command would then throw away.
+    pub fn begin_unit(&self, mission_id: &str, unit_id: &str, cwd: &str) -> Result<Vec<String>> {
+        let existing = crate::checkpoint::dirty_paths(cwd).unwrap_or_default();
+        self.store
+            .save_unit_baseline(mission_id, unit_id, &existing)
+            .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
+        Ok(existing)
+    }
+
     pub async fn complete_unit(&self, mission_id: &str, unit_id: &str, cwd: &str, summary: &str) -> UnitOutcome {
         let validations = self.run_validators(unit_id, cwd).await;
         let gate_passed = crate::validator::all_passed(&validations);
@@ -273,10 +287,48 @@ impl Daemon {
         // No validators configured is NOT a pass — there is no evidence either way,
         // and silently checkpointing would present an unverified state as verified.
         if !gate_passed {
-            return UnitOutcome { validations, gate_passed, checkpoint: None, checkpoint_error: None };
+            return UnitOutcome {
+                validations,
+                gate_passed,
+                checkpoint: None,
+                checkpoint_error: None,
+                left_alone: vec![],
+            };
         }
 
-        match crate::checkpoint::create(cwd, unit_id, summary) {
+        // Work out what is the agent's to commit. Anything already uncommitted when
+        // the unit began is the user's, and stays theirs.
+        let now_dirty = crate::checkpoint::dirty_paths(cwd).unwrap_or_default();
+        let baseline = self.store.get_unit_baseline(mission_id, unit_id);
+        let (to_commit, left_alone) = match &baseline {
+            Some(before) => {
+                let (mine, theirs): (Vec<String>, Vec<String>) =
+                    now_dirty.into_iter().partition(|p| !before.contains(p));
+                (mine, theirs)
+            }
+            // No baseline. If the tree is clean there is nothing of the user's to
+            // lose. If it is NOT clean we cannot tell whose work it is, and the
+            // safe answer is to commit nothing and say why — guessing here is how
+            // you delete someone's evening.
+            None if now_dirty.is_empty() => (vec![], vec![]),
+            None => {
+                return UnitOutcome {
+                    validations,
+                    gate_passed,
+                    checkpoint: None,
+                    checkpoint_error: Some(format!(
+                        "not checkpointed: {} file(s) were already uncommitted and no baseline was \
+                         recorded, so the supervisor cannot tell your work from the agent's. \
+                         Run `agentrelay begin` before the agent starts, or commit/stash your own \
+                         changes first. Nothing was touched.",
+                        now_dirty.len()
+                    )),
+                    left_alone: now_dirty,
+                };
+            }
+        };
+
+        match crate::checkpoint::create_paths(cwd, unit_id, summary, &to_commit) {
             Ok(cp) => {
                 if cp.created {
                     let _ = self.store.save_checkpoint(&crate::store::CheckpointRow {
@@ -287,7 +339,7 @@ impl Daemon {
                         summary: Some(summary.to_string()),
                     });
                 }
-                UnitOutcome { validations, gate_passed, checkpoint: Some(cp), checkpoint_error: None }
+                UnitOutcome { validations, gate_passed, checkpoint: Some(cp), checkpoint_error: None, left_alone }
             }
             // A repo we can't checkpoint (not a repo, git missing) must not be
             // reported as a failed unit — the work passed; only the safety net is
@@ -297,6 +349,7 @@ impl Daemon {
                 gate_passed,
                 checkpoint: None,
                 checkpoint_error: Some(e.to_string()),
+                left_alone,
             },
         }
     }
@@ -349,6 +402,9 @@ pub struct UnitOutcome {
     pub gate_passed: bool,
     pub checkpoint: Option<crate::checkpoint::Checkpoint>,
     pub checkpoint_error: Option<String>,
+    /// Files that were already uncommitted before the unit began. The supervisor
+    /// deliberately did not touch them; they are reported so the user knows.
+    pub left_alone: Vec<String>,
 }
 
 #[cfg(test)]
@@ -476,14 +532,23 @@ mod tests {
         .unwrap();
         let d = Daemon::open(&root).unwrap();
 
+        // The supervisor notes the tree BEFORE the agent starts, so it can tell the
+        // agent's output from the user's own uncommitted work.
+        let baseline = d.begin_unit("m1", "u1", &cwd).unwrap();
+        assert!(!baseline.is_empty(), "init leaves its own files uncommitted");
+
         // The agent changed something and the validators pass -> committed.
         std::fs::write(root.join("work.txt"), "the agent's output\n").unwrap();
         let out = d.complete_unit("m1", "u1", &cwd, "unit 1: add work.txt").await;
         assert!(out.gate_passed);
-        let cp = out.checkpoint.expect("a passing unit is checkpointed");
+        let cp = out.checkpoint.clone().unwrap_or_else(|| panic!("no checkpoint; err={:?} left_alone={:?}", out.checkpoint_error, out.left_alone));
         assert!(cp.created);
         assert!(crate::checkpoint::is_ours(&cwd, &cp.head));
-        assert!(crate::checkpoint::is_clean(&cwd).unwrap());
+        // The tree is deliberately NOT clean: what was already uncommitted before
+        // the unit began stays that way, and is reported rather than swept up.
+        assert_eq!(cp.files_changed, 1, "only the agent's file");
+        assert_eq!(out.left_alone, baseline);
+        assert!(crate::checkpoint::dirty_paths(&cwd).unwrap().contains(&baseline[0]));
         // Our own database must never end up in the user's history.
         let tracked = std::process::Command::new("git")
             .args(["ls-files"])
@@ -562,6 +627,78 @@ mod tests {
             let edited = d.observe_read(&mut book, "m1", "src/big.rs", b"different now", 2);
             assert!(edited.should_send(), "a changed file is always re-sent");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn the_users_own_uncommitted_work_is_never_swept_into_a_checkpoint() {
+        // The worst bug this project has had. You edit a file, go to bed, the agent
+        // touches something unrelated — and `git add --all` put YOUR file in the
+        // agent's commit, next to an "undo this unit" command that would delete it.
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "validators": [{ "kind": "tests", "command": "node --version" }] }).to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+
+        // Three hours of the user's own work, uncommitted.
+        std::fs::write(root.join("seed.txt"), "my novel, chapter one, much improved\n").unwrap();
+        d.begin_unit("m1", "u1", &cwd).unwrap();
+
+        // The agent does something unrelated.
+        std::fs::write(root.join("agent.txt"), "agent output\n").unwrap();
+        let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
+
+        let cp = out.checkpoint.expect("the agent's work is still checkpointed");
+        assert!(out.left_alone.contains(&"seed.txt".to_string()), "{:?}", out.left_alone);
+
+        let committed = std::process::Command::new("git")
+            .args(["show", "--stat", "--name-only", "--format=", &cp.head])
+            .current_dir(&cwd)
+            .output()
+            .unwrap();
+        let committed = String::from_utf8_lossy(&committed.stdout);
+        assert!(committed.contains("agent.txt"), "{committed}");
+        assert!(!committed.contains("seed.txt"), "the user's file was swept in: {committed}");
+
+        // And the undo we advertise really is safe to run now.
+        // Run the exact command the CLI prints, and check the user's work survives.
+        let cmd = crate::checkpoint::undo_command(&cp.head);
+        let args: Vec<&str> = cmd.split_whitespace().skip(1).take(3).collect();
+        let _ = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&cwd)
+            .output()
+            .unwrap();
+        let novel = std::fs::read_to_string(root.join("seed.txt")).unwrap();
+        assert!(novel.contains("much improved"), "undo destroyed the user's work: {novel}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_dirty_tree_with_no_baseline_is_refused_rather_than_guessed_at() {
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "validators": [{ "kind": "tests", "command": "node --version" }] }).to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        std::fs::write(root.join("seed.txt"), "user's edit\n").unwrap();
+        let before = crate::checkpoint::head(&cwd).unwrap();
+
+        // No begin_unit: the supervisor cannot tell whose work this is.
+        let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
+        assert!(out.gate_passed, "the validators still ran and passed");
+        assert!(out.checkpoint.is_none());
+        let err = out.checkpoint_error.unwrap();
+        assert!(err.contains("cannot tell your work from the agent's"), "{err}");
+        assert!(err.contains("Nothing was touched"), "{err}");
+        assert_eq!(crate::checkpoint::head(&cwd).unwrap(), before);
         let _ = std::fs::remove_dir_all(&root);
     }
 

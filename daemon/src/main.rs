@@ -39,6 +39,15 @@ enum Cmd {
         #[arg(long, default_value = "default")]
         unit: String,
     },
+    /// Note what is already uncommitted, BEFORE the agent starts a unit.
+    Begin {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        #[arg(long, default_value = "default")]
+        mission: String,
+        #[arg(long, default_value = "default")]
+        unit: String,
+    },
     /// Finish a unit of work: run the validators and, only if they pass, checkpoint.
     Done {
         /// What this unit did — becomes the commit subject.
@@ -163,6 +172,24 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 Err("validators failed — unit is NOT complete".to_string())
             }
         }
+        Cmd::Begin { cwd, mission, unit } => {
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            let existing = d.begin_unit(&mission, &unit, &cwd).map_err(|e| e.to_string())?;
+            if existing.is_empty() {
+                println!("Tree is clean. Everything the agent changes from here is its own.");
+            } else {
+                println!("{} file(s) are already uncommitted and will be left alone:", existing.len());
+                for p in existing.iter().take(10) {
+                    println!("  {p}");
+                }
+                if existing.len() > 10 {
+                    println!("  … and {} more", existing.len() - 10);
+                }
+                println!();
+                println!("They will NOT be committed by any checkpoint for unit `{unit}`.");
+            }
+            Ok(())
+        }
         Cmd::Done { summary, cwd, mission, unit } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
             let out = d.complete_unit(&mission, &unit, &cwd, &summary).await;
@@ -182,6 +209,11 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             match (&out.checkpoint, &out.checkpoint_error) {
                 (Some(cp), _) if cp.created => {
                     println!("\nCheckpointed {} ({} file(s)) on {}", &cp.head[..7.min(cp.head.len())], cp.files_changed, cp.branch.clone().unwrap_or_else(|| "detached HEAD".into()));
+                    if !out.left_alone.is_empty() {
+                        println!("  Left alone ({} file(s) you had already changed): {}",
+                            out.left_alone.len(),
+                            out.left_alone.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
+                    }
                     println!("  Undo this unit:   {}", agentrelay::checkpoint::undo_command(&cp.head));
                     println!("  Rewind here later: {}", agentrelay::checkpoint::rewind_command(&cp.head));
                 }
@@ -213,10 +245,12 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 }
             }
 
-            // A night with failed units exits non-zero: the report is meant to be
-            // usable from a script that decides whether to wake someone.
-            if r.units_failed > 0 {
-                return Err(format!("{} unit(s) failed overnight", r.units_failed));
+            // Non-zero whenever a person should look — failures, but also units
+            // nobody verified and units with no restore point. The report is meant
+            // to be usable from a script that decides whether to wake someone, and
+            // "we never checked" must not read as "fine".
+            if r.needs_attention() {
+                return Err(r.headline());
             }
             Ok(())
         }

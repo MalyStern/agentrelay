@@ -121,6 +121,36 @@ NEXT: Telegram (two-way approve/abort) needs the credential broker for the bot
 token — never in config.json. Then Phase-2: Mission-Contract state machine,
 Isolation-Ring, cost ledger + budget kill-switch.
 
+ADVERSARIAL QA + FIXES (2026-08-02): a read-only audit agent found 13 issues; the
+worst were real and reproduced. Fixed in this pass:
+  1. checkpoint used `git add --all`, sweeping the USER's uncommitted work into the
+     agent's commit — and the advertised undo then deleted it. Now: begin_unit
+     records a baseline, create_paths commits ONLY the agent's paths, dirty-tree
+     with no baseline is REFUSED, and undo/rewind use `git reset --keep` (aborts
+     rather than discarding uncommitted work) instead of `--hard`.
+  7/8. report counted only units WITH validations, so a night with the DEFAULT
+     config ("validators": []) reported "all validators passed", exit 0. Now
+     units_unverified + units_uncheckpointed, needs_attention() drives the exit code.
+  9. THE BIG ONE: claude_stream emitted Error{quota.rate_limited} but every quota
+     consumer matches AgentEvent::RateLimited, which nothing outside tests built.
+     Resume after a quota reset was dead code. Now emits RateLimited + parses reset_at.
+  2/3/4. ReadOnly guard bypassed by "
+", $(), backticks, `env`, and git
+     branch/stash/config; unparsed write/shell tools produced 0 actions = ALLOW.
+     Now ProposedAction::Unknown is refused by every guard (fail closed).
+  5/6. forbid_path was case-sensitive (.ENV == .env on Windows/macOS); `C:file`
+     (drive-relative) counted as relative and auto-approved.
+  10. send_gate opened when condition_result was None (evaluated == not evaluated).
+  11. truncate() sliced by byte index -> panic on multi-byte output (tsc/vitest/Hebrew).
+119 cargo tests.
+
+STILL OPEN from the audit (next): #12 rename/UTF-8 paths in porcelain (use -z),
+#13 IPC token must fail if getrandom fails + cap the body before auth, Unix
+ProcessGroup has no Drop (leaks the tree; Windows does), keepawake is per-thread
+but held across awaits, report pulls ALL git checkpoints not just this mission's,
+guard violations are not written to events/report, and install_guards is a no-op
+so Watchtower-1 is advisory (kill-after-the-fact) rather than a PreToolUse block.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
