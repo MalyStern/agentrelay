@@ -355,6 +355,71 @@ impl Store {
         Ok(())
     }
 
+    /// Add what a turn actually cost to the mission's running total.
+    ///
+    /// Stored as a running sum rather than recomputed from events, so the
+    /// kill-switch can answer "how much has this cost" in one query at the moment
+    /// it has to decide — and so the answer survives a restart, which is exactly
+    /// when a cap is easiest to lose track of.
+    pub fn add_cost_usd(&self, mission_id: &str, usd: f64) -> rusqlite::Result<()> {
+        if !(usd.is_finite() && usd > 0.0) {
+            return Ok(());
+        }
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET
+               value = CAST(CAST(meta.value AS REAL) + ?3 AS TEXT)",
+            params![format!("cost_usd:{mission_id}"), usd.to_string(), usd],
+        )?;
+        Ok(())
+    }
+
+    pub fn total_cost_usd(&self, mission_id: &str) -> f64 {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![format!("cost_usd:{mission_id}")],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|c| c.is_finite())
+            .unwrap_or(0.0)
+    }
+
+    /// The most expensive single turn seen for this mission — the honest estimate
+    /// of what the next one might cost.
+    pub fn max_turn_cost_usd(&self, mission_id: &str) -> f64 {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![format!("max_turn_usd:{mission_id}")],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|c| c.is_finite())
+            .unwrap_or(0.0)
+    }
+
+    pub fn note_turn_cost_usd(&self, mission_id: &str, usd: f64) -> rusqlite::Result<()> {
+        if !(usd.is_finite() && usd > 0.0) {
+            return Ok(());
+        }
+        if usd > self.max_turn_cost_usd(mission_id) {
+            self.conn.lock().unwrap().execute(
+                "INSERT INTO meta(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![format!("max_turn_usd:{mission_id}"), usd.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Record where the quota wall is, as the provider reported it.
     ///
     /// Worth persisting even when nothing is wrong: it is how the supervisor knows,

@@ -169,6 +169,10 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
             // This is better evidence than our own record of having said no: it is
             // the agent confirming the tool never ran. The morning report can state
             // it as fact rather than as our side of the story.
+            if let Some(usd) = crate::cost::cost_from_result(line) {
+                out.events.push(AgentEvent::CostReported { usd });
+            }
+
             if let Some(denials) = obj.get("permission_denials").and_then(|v| v.as_array()) {
                 for d in denials {
                     let tool = d

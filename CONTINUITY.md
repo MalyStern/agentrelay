@@ -235,6 +235,24 @@ healthy turns, two things became possible that the plan said were not.
      work for lack of information is a worse failure than being interrupted).
 152 cargo tests.
 
+PHASE-2 STARTED: COST LEDGER + BUDGET KILL-SWITCH (2026-08-02). cost.rs. The live
+capture gave the real field name: the result event carries total_cost_usd, so the
+ledger records what was CHARGED rather than an estimate from a price table that
+goes stale. Budget{mission_usd,turn_usd} in config; unset = no limit and status
+says so out loud. The cap is checked BEFORE a turn (run_turn refuses), using the
+most expensive turn so far as the honest guess at the next one - checking after
+only tells you how far past the line you are, and money is the one resource here
+git cannot restore. A missing total_cost_usd is None, never 0.0 (0.0 would read as
+'free' and disarm the cap). Spend is a running sum in the store so it survives a
+restart. Also fixed the audit's keepawake finding: SetThreadExecutionState is
+per-thread and the guard was dropped on whichever tokio worker happened to run it,
+so the release did nothing while the original request stayed alive (a machine that
+never sleeps again). The request now lives on a dedicated thread and Drop joins it.
+164 cargo tests.
+
+NEXT (Phase-2): Mission-Contract state machine, Isolation-Ring (container +
+egress allowlist), CI loop. Remaining audit item: none open that reproduce.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

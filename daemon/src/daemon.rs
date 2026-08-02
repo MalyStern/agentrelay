@@ -39,6 +39,10 @@ pub struct Config {
     /// outbound network path in the daemon, and `None` by default.
     #[serde(default)]
     pub notify: crate::notify::NotifyConfig,
+    /// Spending cap. Unset means no limit — and `status` says so out loud, because
+    /// a budget you believe is set but isn't is worse than none.
+    #[serde(default)]
+    pub budget: crate::cost::Budget,
 }
 
 impl Default for Config {
@@ -53,6 +57,7 @@ impl Default for Config {
             keep_awake: true,
             validators: vec![],
             notify: crate::notify::NotifyConfig::None,
+            budget: crate::cost::Budget::default(),
         }
     }
 }
@@ -66,6 +71,9 @@ pub struct StatusReport {
     pub program: String,
     /// In plain words: what, if anything, leaves this machine.
     pub notifications: String,
+    /// In plain words: the spending cap, or that there isn't one.
+    pub budget: String,
+    pub spent_usd: f64,
 }
 
 const DIR: &str = ".agentrelay";
@@ -167,7 +175,23 @@ impl Daemon {
             keep_awake: self.config.keep_awake,
             program: self.config.program.clone(),
             notifications: self.config.notify.describe_privacy(),
+            budget: self.config.budget.describe(),
+            spent_usd: self.store.total_cost_usd("default"),
         }
+    }
+
+    /// May another turn start, given what has been spent so far?
+    ///
+    /// Checked BEFORE the turn. Asking afterwards only reports how far past the
+    /// line the run already is, and money is the one thing here that cannot be
+    /// restored from git.
+    pub fn check_budget(&self, mission_id: &str) -> crate::cost::BudgetVerdict {
+        let spent = self.store.total_cost_usd(mission_id);
+        // The most expensive turn so far is the honest guess at the next one. With
+        // no history, a small non-zero figure still prevents starting a run whose
+        // cap is already reached.
+        let worst = self.store.max_turn_cost_usd(mission_id).max(0.01);
+        crate::cost::check_before_turn(&self.config.budget, spent, worst)
     }
 
     /// Send the report headline, if — and only if — notifications are configured.
@@ -227,6 +251,15 @@ impl Daemon {
 
     /// Run against the configured Claude engine.
     pub async fn run_turn(&self, mission_id: &str, prompt: &str, cwd: &str) -> Result<TurnOutcome> {
+        // The budget kill-switch, before anything is spent. Every other guard here
+        // protects something git can restore; this one protects the only thing that
+        // cannot be un-spent.
+        if let crate::cost::BudgetVerdict::Stop { reason, .. } = self.check_budget(mission_id) {
+            return Err(AgentRelayError::new(
+                ErrorCode::Internal,
+                format!("budget reached — not starting a turn: {reason}"),
+            ));
+        }
         let adapter = crate::claude_adapter::ClaudeAdapter::with_program(&self.config.program);
         self.run_turn_with(&adapter, mission_id, prompt, cwd).await
     }
@@ -711,6 +744,64 @@ mod tests {
         assert!(err.contains("cannot tell your work from the agent's"), "{err}");
         assert!(err.contains("Nothing was touched"), "{err}");
         assert_eq!(crate::checkpoint::head(&cwd).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn the_budget_stops_the_run_before_the_money_is_spent() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "budget": { "mission_usd": 1.00 } }).to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+
+        assert!(d.check_budget("m1").may_proceed(), "nothing spent yet");
+
+        // Two turns at 60 cents. The second is refused BEFORE it runs, not
+        // reported afterwards.
+        d.store().add_cost_usd("m1", 0.60).unwrap();
+        d.store().note_turn_cost_usd("m1", 0.60).unwrap();
+        match d.check_budget("m1") {
+            crate::cost::BudgetVerdict::Stop { spent_usd, cap_usd, reason } => {
+                assert!((spent_usd - 0.60).abs() < 1e-9);
+                assert!((cap_usd - 1.00).abs() < 1e-9);
+                assert!(reason.contains("would pass"), "{reason}");
+            }
+            other => panic!("must stop before crossing, got {other:?}"),
+        }
+
+        // And run_turn itself refuses rather than relying on the caller to check.
+        let err = d.run_turn("m1", "go", ".").await.unwrap_err().to_string();
+        assert!(err.contains("budget reached"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spending_survives_a_restart_because_a_cap_is_useless_otherwise() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        {
+            let d = Daemon::open(&root).unwrap();
+            d.store().add_cost_usd("m1", 0.25).unwrap();
+            d.store().add_cost_usd("m1", 0.25).unwrap();
+        }
+        let d = Daemon::open(&root).unwrap();
+        assert!((d.store().total_cost_usd("m1") - 0.50).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn with_no_budget_configured_status_says_so_rather_than_implying_one() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        assert!(!d.config().budget.is_set());
+        assert!(d.status().budget.contains("No spending cap is set"), "{}", d.status().budget);
+        assert!(d.check_budget("m1").may_proceed());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -138,6 +138,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!("  keep-awake:  {}", s.keep_awake);
             println!();
             println!("{}", s.notifications);
+            println!();
+            println!("{} Spent so far: ${:.2}.", s.budget, s.spent_usd);
             Ok(())
         }
         Cmd::Run { prompt, cwd, mission } => {

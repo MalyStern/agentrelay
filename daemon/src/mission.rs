@@ -26,6 +26,8 @@ pub struct TurnOutcome {
     pub completed: bool,
     /// We interrupted the turn (a guard blocked an action).
     pub interrupted: bool,
+    /// What the provider charged for this turn, in USD.
+    pub cost_usd: f64,
 }
 
 fn event_kind(e: &AgentEvent) -> String {
@@ -92,6 +94,13 @@ pub async fn run_turn_supervised(
                 if matches!(event, AgentEvent::TurnCompleted { .. }) {
                     outcome.completed = true;
                 }
+            }
+            // What the turn actually cost. Recorded the moment it is reported, so
+            // a crash between turns cannot lose spending that already happened.
+            AgentEvent::CostReported { usd } => {
+                let _ = store.add_cost_usd(mission_id, *usd);
+                let _ = store.note_turn_cost_usd(mission_id, *usd);
+                outcome.cost_usd += *usd;
             }
             // The agent confirming a call never ran. Recorded under its own kind so
             // the report can say "the provider refused it" rather than only "we

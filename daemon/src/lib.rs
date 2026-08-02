@@ -11,6 +11,7 @@ pub mod claude_adapter;
 pub mod claude_stream;
 pub mod context;
 pub mod fake_adapter;
+pub mod cost;
 pub mod credential;
 pub mod daemon;
 pub mod error;
