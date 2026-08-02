@@ -287,6 +287,21 @@ when Docker is absent. 187 cargo tests.
 NEXT (Phase-2): VCS/CI loop (red CI -> auto-fix), Drift detection (Watchtower
 layer-3).
 
+WATCHTOWER LAYER-3: DRIFT (2026-08-02). drift.rs. Layers 1 and 2 cannot catch the
+failure that actually ruins a night: an agent doing ALLOWED things that PASS, on
+the wrong problem. You ask for a parser fix and wake up to a refactored build
+system - every command permitted, every test green, night wasted. Measured against
+config.scope.touches/max_files, checked on exactly the paths the unit is about to
+commit. Deliberately REPORTS and never stops: a false halt at 3am costs a whole
+night, so being decisive is left to the layers that are certain. Unstated scope =
+`unchecked`, never 'clean' - 'we looked and found nothing' and 'we never looked'
+must not read the same. Flags CI/dependency/.env/.gitignore edits even when in
+scope, and reports each file once. Shows as [ESTIMATED] in the morning report.
+197 cargo tests (incl. the live Docker one).
+
+NEXT (Phase-2): VCS/CI loop (red CI -> auto-fix). Then Phase-3/4: Codex adapter,
+ACP generic, Tauri UI, i18n.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

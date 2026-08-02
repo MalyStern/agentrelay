@@ -220,6 +220,16 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
             });
             continue;
         }
+        if e.kind == "drift.detected" {
+            let summary = e.payload.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            lines.push(Line {
+                // A heuristic, so it is labelled as one. Calling it VERIFIED would
+                // put a guess next to things a command actually proved.
+                provenance: Provenance::Estimated,
+                text: format!("possible drift from the task — {summary}"),
+            });
+            continue;
+        }
         if e.kind != "guard.violation" {
             continue;
         }

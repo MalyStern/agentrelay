@@ -46,6 +46,10 @@ pub struct Config {
     /// Run the agent inside a container. Off unless an image is named.
     #[serde(default)]
     pub isolation: crate::isolation::Isolation,
+    /// What a unit is expected to touch (Watchtower layer-3). Unstated means drift
+    /// is not checked, and the report says so rather than implying it was clean.
+    #[serde(default)]
+    pub scope: crate::drift::UnitScope,
 }
 
 impl Default for Config {
@@ -62,6 +66,7 @@ impl Default for Config {
             notify: crate::notify::NotifyConfig::None,
             budget: crate::cost::Budget::default(),
             isolation: crate::isolation::Isolation::default(),
+            scope: crate::drift::UnitScope::default(),
         }
     }
 }
@@ -423,6 +428,20 @@ impl Daemon {
                 };
             }
         };
+
+        // Layer 3, on exactly the paths this unit produced. Reported, never
+        // enforced: a heuristic that stops a night is worse than one that explains
+        // it in the morning.
+        let drift = crate::drift::detect(&self.config.scope, &to_commit);
+        if drift.has_drift() {
+            let _ = self.store.append_event(&crate::store::AppendEvent {
+                mission_id: Some(mission_id.to_string()),
+                actor: "watchtower".to_string(),
+                kind: "drift.detected".to_string(),
+                payload: serde_json::json!({ "unit": unit_id, "summary": drift.summary() }),
+                seq_in_turn: None,
+            });
+        }
 
         match crate::checkpoint::create_paths(cwd, unit_id, summary, &to_commit) {
             Ok(cp) => {
@@ -910,6 +929,43 @@ mod tests {
         d.transition("m1", Running, "still running").unwrap();
         d.transition("m1", Running, "still running").unwrap();
         assert_eq!(d.store().get_transitions("m1").unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn drift_is_reported_in_the_morning_but_never_stops_the_night() {
+        // The night where every command was allowed, every test passed, and the
+        // wrong problem got solved.
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({
+                "validators": [{ "kind": "tests", "command": "node --version" }],
+                "scope": { "touches": ["src/**"] }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        d.begin_unit("m1", "u1", &cwd).unwrap();
+
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/asked_for.rs"), "the actual task\n").unwrap();
+        std::fs::write(root.join("deploy.sh"), "not what was asked\n").unwrap();
+
+        let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
+
+        // Drift does NOT block: the work still passed and was still checkpointed.
+        assert!(out.gate_passed);
+        assert!(out.checkpoint.is_some(), "drift must not stop a passing unit");
+
+        let report = d.morning_report("m1", &cwd).render();
+        assert!(report.contains("possible drift"), "{report}");
+        assert!(report.contains("deploy.sh"), "and names the file: {report}");
+        assert!(report.contains("[ESTIMATED]"), "labelled a guess, not evidence: {report}");
+        assert!(!report.contains("asked_for.rs"), "in-scope work is not flagged: {report}");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

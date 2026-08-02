@@ -14,6 +14,7 @@ pub mod fake_adapter;
 pub mod cost;
 pub mod credential;
 pub mod daemon;
+pub mod drift;
 pub mod error;
 pub mod events;
 pub mod guard;
