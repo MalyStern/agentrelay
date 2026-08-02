@@ -388,6 +388,24 @@ waited forever for a header terminator. I 'fixed' it first with spawn_blocking +
 blocking_lock, which was chasing a phantom - reverted. Check the test before
 rewriting the code.
 
+DESKTOP APP (2026-08-02): app/ - a native Tauri v2 window, not just the CLI. Removes
+the two barriers for a non-terminal user: a button spawns `agentrelay serve`, and
+the Rust backend reads the token from ipc.json and attaches it itself so the token
+NEVER reaches the webview (enforced, where the browser UI can only ask). Talks to
+the daemon over the loopback HTTP API (/status, /report) - does NOT compile against
+the daemon crate, so they build independently and could be worked on in parallel.
+Webview makes no network calls of its own; CSP locks it to its own origin. Closing
+the window kills the daemon it started. Self-contained frontend keeps the product's
+rules (attention banner from needs_attention, provenance never by colour alone).
+VERIFIED: builds clean, the .exe launches a real window titled AgentRelay that
+stays up and closes cleanly. NOT verified: the in-window folder-dialog->live-data
+flow (needs a human at the GUI). Icons generated with `cargo tauri icon`.
+Build: cd app/src-tauri && cargo tauri dev|build. WebView2 present (150.x).
+
+Three sub-agents ran Phase-4 polish in parallel (disjoint dirs, no conflict):
+daemon Phase-4 (cloud/calendar/templates - cloud.rs already landed), the 3 CLIs,
+and the ui/ visual pass. Awaiting their reports.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
