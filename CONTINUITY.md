@@ -334,6 +334,21 @@ is 'rejected' not 'cancelled' - cancelled reads as the user walking away and
 invites a retry. NOT yet verified against a live ACP agent: that is the next
 contract test (gemini --acp is the easiest). 220 cargo tests.
 
+ACP ADAPTER (2026-08-02): acp_adapter.rs - the process half. Spawns an ACP agent,
+drives it over stdio, and yields the SAME AgentEvent stream, so one adapter covers
+Gemini CLI / Codex / OpenCode / Copilot CLI / Cline / Goose. The decision that
+matters: permission requests are answered INLINE from the same evaluate_guards -
+the agent is blocked on our reply, so this is enforcement like the Claude hook, not
+commentary. A permission request we cannot parse is DENIED ('we could not tell what
+this was' must never resolve to yes). Tested against real node subprocesses over
+real pipes, and the fake agent ECHOES our reply back so the test proves the refusal
+arrived, not just that we intended one. Banners/half-frames/unknown methods are
+ignored, so an agent version bump is a missing feature not an outage. 226 tests.
+
+Two sub-agents running in parallel on Phase-4: ui/ (web UI, demo mode) and i18n/
+(23-language catalogue + bidi/plural validator). They were told to stay out of
+daemon/ and to `git add` only their own paths.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

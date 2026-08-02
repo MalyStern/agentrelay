@@ -6,6 +6,7 @@
 //! production implementation (tested here). See `docs/adr/0001-*`.
 
 pub mod acp;
+pub mod acp_adapter;
 pub mod adapter;
 pub mod checkpoint;
 pub mod claude_adapter;
