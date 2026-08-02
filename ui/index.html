@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>AgentRelay — overnight report</title>
+<!--
+  AgentRelay web UI. One file on purpose: this has to open from disk on a user's
+  machine (file://) with no build, no bundler, no server. Everything below is
+  inline because a second request — even to localhost — is a way for the "local,
+  no-telemetry" promise to break on the very screen that advertises it.
+
+  Two honesty rules that shaped this file, taken from the daemon:
+    * We never present a guess as a fact. Provenance (VERIFIED / RECORDED /
+      ESTIMATED) is shown on every claim, and never by colour alone.
+    * The morning report (units, checkpoints, provenance lines) is produced by
+      `agentrelay report` and is NOT served over IPC — only GET /status is. So in
+      LIVE mode we render exactly what /status returns and say plainly that the
+      full report is not on the wire. We do not invent a /report endpoint, because
+      inventing evidence is the one thing this product exists to refuse.
+-->
+<style>
+  /* System fonts only — no web fonts, because a font fetch is a network request. */
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --surface-2: #eceef1;
+    --ink: #14171c;
+    --ink-soft: #4a515b;
+    --ink-faint: #6b7280;
+    --line: #d6dae0;
+    --line-strong: #b7bdc6;
+    /* Attention/calm are reinforced by icon + text everywhere, never colour alone. */
+    --alarm-bg: #fbe9e7;
+    --alarm-ink: #7a1f12;
+    --alarm-line: #c0392b;
+    --calm-bg: #e6f4ea;
+    --calm-ink: #1d4d2b;
+    --calm-line: #2e7d46;
+    --wait-bg: #fdf3d9;
+    --wait-ink: #6b4e0e;
+    --wait-line: #b8860b;
+    --focus: #1a6dd4;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116;
+      --surface: #171b22;
+      --surface-2: #1f242d;
+      --ink: #eef1f5;
+      --ink-soft: #b9c1cc;
+      --ink-faint: #8a94a1;
+      --line: #2a2f39;
+      --line-strong: #3a414d;
+      --alarm-bg: #3a1510;
+      --alarm-ink: #ffcabf;
+      --alarm-line: #e06450;
+      --calm-bg: #102a19;
+      --calm-ink: #b7e6c4;
+      --calm-line: #4caf6a;
+      --wait-bg: #2e2510;
+      --wait-ink: #f0d99a;
+      --wait-line: #d4a531;
+      --focus: #5aa2f0;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    font-size: 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 16px; }
+
+  a { color: var(--focus); }
+  code, .mono {
+    font-family: ui-monospace, "Cascadia Code", "Consolas", "SFMono-Regular", Menlo, monospace;
+    font-size: 0.92em;
+  }
+
+  /* A visible focus ring everywhere — keyboard users must see where they are. */
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+  h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.2px; }
+  h2 { font-size: 1.02rem; margin: 0 0 10px; }
+  h3 { font-size: 0.95rem; margin: 0 0 6px; }
+  p { margin: 0 0 8px; }
+
+  header.top {
+    display: flex; flex-wrap: wrap; gap: 10px 14px;
+    align-items: center; justify-content: space-between;
+    padding-bottom: 12px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand .sub { color: var(--ink-faint); font-size: 0.85rem; }
+
+  .modebar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--line-strong); background: var(--surface);
+    font-size: 0.82rem; color: var(--ink-soft);
+  }
+  .pill b { color: var(--ink); }
+
+  button, select, input {
+    font: inherit; color: inherit;
+  }
+  button, select {
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line-strong); border-radius: 8px;
+    padding: 7px 12px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--focus); }
+  button[aria-pressed="true"] { background: var(--surface-2); border-color: var(--focus); font-weight: 600; }
+  label { font-size: 0.85rem; color: var(--ink-soft); }
+
+  section.card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin: 14px 0;
+  }
+
+  /* ---- The morning answer: the top of the page, answering "do I act?" ---- */
+  .answer {
+    border-radius: var(--radius);
+    border: 2px solid var(--line-strong);
+    padding: 18px 18px 16px;
+    margin: 6px 0 4px;
+  }
+  .answer.attention { background: var(--alarm-bg); border-color: var(--alarm-line); color: var(--alarm-ink); }
+  .answer.calm      { background: var(--calm-bg);  border-color: var(--calm-line);  color: var(--calm-ink); }
+  .answer.neutral   { background: var(--surface);  border-color: var(--line-strong); }
+  .answer .verdict {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 1.5rem; font-weight: 700; line-height: 1.2;
+  }
+  .answer .verdict .mark { font-size: 1.6rem; line-height: 1; }
+  .answer .headline { margin: 10px 0 4px; font-weight: 600; }
+  .answer ul { margin: 8px 0 0; padding-left: 1.2em; }
+  .answer li { margin: 4px 0; }
+
+  /* ---- Provenance chips: icon + shape + word. Never colour alone. ---- */
+  .prov {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 1px 8px 1px 6px; border-radius: 6px;
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.4px;
+    white-space: nowrap; vertical-align: middle;
+  }
+  .prov .g { font-weight: 700; }
+  /* VERIFIED — a double solid border + double-check glyph: "a command proved it". */
+  .prov.verified { border: 2px double var(--calm-line); color: var(--calm-ink); background: var(--calm-bg); }
+  /* RECORDED — a single solid border + filled square: "the supervisor saw it". */
+  .prov.recorded { border: 1px solid var(--ink-faint); color: var(--ink-soft); background: var(--surface-2); }
+  /* ESTIMATED — a DASHED border + wavy glyph: the shape itself says "not solid". */
+  .prov.estimated { border: 1.5px dashed var(--wait-line); color: var(--wait-ink); background: var(--wait-bg); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-start; }
+  .legend .item { flex: 1 1 220px; min-width: 200px; }
+  .legend .item p { font-size: 0.85rem; color: var(--ink-soft); margin: 4px 0 0; }
+
+  /* ---- Unit tallies ---- */
+  .tallies { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .tally {
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    background: var(--surface-2);
+  }
+  .tally .n { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+  .tally .k { font-size: 0.82rem; color: var(--ink-soft); margin-top: 4px; display: flex; align-items: center; gap: 5px; }
+  .tally.warn { border-color: var(--alarm-line); }
+  .tally.warn .n { color: var(--alarm-ink); }
+  .tally.wait { border-color: var(--wait-line); }
+
+  /* ---- Report lines ---- */
+  ul.lines { list-style: none; margin: 0; padding: 0; }
+  ul.lines li {
+    display: grid; grid-template-columns: auto 1fr; gap: 10px;
+    align-items: start; padding: 9px 0; border-top: 1px solid var(--line);
+  }
+  ul.lines li:first-child { border-top: 0; }
+  ul.lines .txt { min-width: 0; overflow-wrap: anywhere; }
+
+  /* ---- State panel ---- */
+  .statebox { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+  .statebox .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 8px; font-weight: 700;
+    border: 2px solid var(--line-strong); background: var(--surface-2);
+  }
+  .statebox.wait .badge { background: var(--wait-bg); color: var(--wait-ink); border-color: var(--wait-line); }
+  .statebox.selfrun .badge { background: var(--calm-bg); color: var(--calm-ink); border-color: var(--calm-line); }
+  .statebox .meaning { flex: 1 1 260px; }
+  .loud {
+    margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    background: var(--wait-bg); color: var(--wait-ink);
+    border: 2px solid var(--wait-line); font-weight: 600;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+
+  /* ---- Spending ---- */
+  .spend-figure { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
+  .spend-figure .amt { font-size: 1.8rem; font-weight: 700; }
+  .bar {
+    height: 16px; border-radius: 999px; background: var(--surface-2);
+    border: 1px solid var(--line-strong); overflow: hidden; margin: 8px 0 6px;
+  }
+  .bar > span { display: block; height: 100%; background: var(--calm-line); }
+  .bar.near > span { background: var(--wait-line); }
+  .bar.over > span { background: var(--alarm-line); }
+  .nocap {
+    padding: 10px 12px; border-radius: 8px; border: 2px dashed var(--line-strong);
+    background: var(--surface-2); color: var(--ink-soft); font-weight: 600;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+
+  /* ---- Checkpoints ---- */
+  .cp { border-top: 1px solid var(--line); padding: 10px 0; }
+  .cp:first-child { border-top: 0; }
+  .cp .id { font-weight: 600; }
+  .cmd {
+    display: flex; gap: 8px; align-items: center; margin-top: 6px;
+    background: var(--surface-2); border: 1px solid var(--line-strong);
+    border-radius: 8px; padding: 6px 8px;
+  }
+  .cmd code { flex: 1 1 auto; overflow-x: auto; white-space: pre; padding: 2px 0; }
+  .cmd button { padding: 4px 10px; font-size: 0.82rem; flex: 0 0 auto; }
+  .undo-note { font-size: 0.8rem; color: var(--ink-faint); margin-top: 6px; }
+
+  .kv { margin: 0; }
+  .kv div { padding: 8px 0; border-top: 1px solid var(--line); }
+  .kv div:first-child { border-top: 0; }
+  .kv dt { font-size: 0.8rem; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.4px; }
+  .kv dd { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  .muted { color: var(--ink-faint); font-size: 0.86rem; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* Connect dialog (live mode). The token is typed here and kept only in memory —
+     never rendered back, never stored, never written to disk. */
+  dialog {
+    border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: var(--surface); color: var(--ink); max-width: 460px; width: 92%;
+    padding: 18px;
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.5); }
+  dialog .field { margin: 12px 0; }
+  dialog input {
+    width: 100%; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line-strong); background: var(--surface-2);
+  }
+  dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  .err { color: var(--alarm-ink); background: var(--alarm-bg); border: 1px solid var(--alarm-line);
+         border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+
+  footer { color: var(--ink-faint); font-size: 0.82rem; margin: 20px 0 40px; }
+
+  /* Honour a user who does not want motion. Nothing here animates by default, but
+     any future transition is disabled rather than merely shortened. */
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  }
+
+  @media (max-width: 360px) {
+    .wrap { padding: 12px; }
+    .answer .verdict { font-size: 1.25rem; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <h1>AgentRelay</h1>
+      <span class="sub">overnight report</span>
+    </div>
+    <div class="modebar" role="group" aria-label="Data source">
+      <span class="pill" id="modePill" aria-live="polite"><span aria-hidden="true">●</span> <b id="modeText">demo</b></span>
+      <label class="sr-only" for="scenario">Demo scenario</label>
+      <select id="scenario" aria-label="Demo scenario"></select>
+      <button id="connectBtn" type="button">Connect to a daemon…</button>
+      <button id="refreshBtn" type="button" hidden>Refresh</button>
+    </div>
+  </header>
+
+  <!-- Priority 1: the answer, before anything else on the page. role=status so a
+       screen reader announces the verdict on load and on every refresh. -->
+  <div id="answer" class="answer neutral" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <main id="main"></main>
+
+  <footer>
+    <p id="sourceNote"></p>
+    <p>Local-first. This page makes no network request except to a daemon you connect it to on 127.0.0.1.
+       No fonts, scripts, or data are fetched from anywhere else.</p>
+  </footer>
+</div>
+
+<!-- Connect dialog -->
+<dialog id="connectDlg" aria-labelledby="connectTitle">
+  <h2 id="connectTitle">Connect to a running daemon</h2>
+  <p class="muted">Start it with <code>agentrelay serve</code>. It writes the address and a bearer token to
+     <code>.agentrelay/ipc.json</code>. Copy both here — the token stays in this page's memory only, and is
+     never stored or shown again.</p>
+  <div class="field">
+    <label for="addr">Address</label>
+    <input id="addr" type="text" inputmode="url" placeholder="127.0.0.1:52001" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="field">
+    <label for="token">Bearer token</label>
+    <input id="token" type="password" placeholder="from .agentrelay/ipc.json" autocomplete="off" spellcheck="false">
+  </div>
+  <div id="connectErr" class="err" hidden></div>
+  <div class="row">
+    <button id="cancelConnect" type="button">Cancel</button>
+    <button id="doConnect" type="button">Connect</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * Data shapes mirror the daemon's Rust structs exactly. We do not add
+ * fields the daemon does not emit — a UI that shows more than the daemon
+ * knows is a UI that guesses.
+ *   MorningReport  -> daemon/src/report.rs
+ *   StatusReport   -> daemon/src/daemon.rs
+ * ------------------------------------------------------------------ */
+
+const PROV = {
+  // glyph + word, both carried on every chip so the tag survives greyscale,
+  // colour blindness, and a screen reader alike.
+  VERIFIED:  { cls: "verified",  glyph: "✓✓", label: "VERIFIED",  say: "verified by a command" },
+  RECORDED:  { cls: "recorded",  glyph: "▣",  label: "RECORDED",  say: "recorded by the supervisor" },
+  ESTIMATED: { cls: "estimated", glyph: "≈",  label: "ESTIMATED", say: "estimated, not measured" },
+};
+
+function provChip(tag) {
+  const p = PROV[tag] || PROV.RECORDED;
+  const el = document.createElement("span");
+  el.className = "prov " + p.cls;
+  el.setAttribute("role", "img");
+  el.setAttribute("aria-label", p.label + " — " + p.say);
+  el.innerHTML = '<span class="g" aria-hidden="true">' + p.glyph + '</span><span aria-hidden="true">' + p.label + '</span>';
+  return el;
+}
+
+/* Map report.rs Provenance enum (Verified/Recorded/Estimated) to a tag. */
+function provTag(provenance) {
+  return String(provenance || "").toUpperCase();
+}
+
+const el = (tag, props = {}, kids = []) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k === "html") n.innerHTML = v;
+    else if (k === "aria") for (const [ak, av] of Object.entries(v)) n.setAttribute("aria-" + ak, av);
+    else n.setAttribute(k, v);
+  }
+  for (const kid of [].concat(kids)) if (kid) n.appendChild(typeof kid === "string" ? document.createTextNode(kid) : kid);
+  return n;
+};
+
+/* ================================================================== *
+ * Demo fixtures. Realistic because the user evaluates the UI through
+ * them — they can't see a live screen. Every scenario is a real state
+ * the daemon can reach, and exercises every provenance tag.
+ * ================================================================== */
+
+const F_STATUS_BASE = {
+  db_path: ".agentrelay/agentrelay.db",
+  schema_version: 7,
+  missions: 1,
+  keep_awake: true,
+  program: "claude",
+  notifications: "Notifications are OFF. Nothing leaves this machine.",
+  budget: "Spending cap: $15.00 for this mission.",
+  spent_usd: 0,
+  state: "running",
+  state_meaning: "working",
+  waiting_for_you: false,
+  isolation: "Isolation is ON: the agent runs inside `node:20-bookworm`, with only the workspace mounted.\nNetwork: OFF. Nothing the agent runs can reach the internet.",
+};
+
+function statusFor(over) { return Object.assign({}, F_STATUS_BASE, over); }
+
+const SCENARIOS = [
+  {
+    id: "failed",
+    label: "A unit failed — you're needed",
+    report: {
+      mission_id: "nightly-auth-refactor",
+      units_completed: 2, units_failed: 1, units_unverified: 0, units_uncheckpointed: 0,
+      nothing_happened: false,
+      lines: [
+        { provenance: "Verified", text: "u3-token-rotation: FAILED — build did not pass. This work was NOT committed; it is still in your working tree" },
+        { provenance: "Verified", text: "u1-login-form: 2 check(s) passed (tests, build)" },
+        { provenance: "Verified", text: "u2-session-store: 3 check(s) passed (tests, build, lint)" },
+        { provenance: "Recorded", text: "checkpoint 9f3a2c1 (u1-login-form) — `git show 9f3a2c1` to read it" },
+        { provenance: "Recorded", text: "checkpoint 4b8e0d2 (u2-session-store) — `git show 4b8e0d2` to read it" },
+        { provenance: "Recorded", text: "3 file(s) left uncommitted in the working tree: src/auth/token.rs, src/auth/mod.rs, tests/token_test.rs" },
+        { provenance: "Recorded", text: "the fix loop stopped and left this for you — 4 attempts, the build error did not change" },
+        { provenance: "Estimated", text: "~128 KB of file content was not re-sent because the files were unchanged (~32000 tokens, at a rough 4 bytes per token)" },
+      ],
+      checkpoints: [["9f3a2c1e5b", "u1-login-form"], ["4b8e0d29a1", "u2-session-store"]],
+    },
+    status: statusFor({ state: "waiting_input", state_meaning: "STOPPED, waiting for you — it will not continue by itself", waiting_for_you: true, spent_usd: 8.42 }),
+  },
+  {
+    id: "green",
+    label: "All green — safe to trust",
+    report: {
+      mission_id: "docs-site-migration",
+      units_completed: 4, units_failed: 0, units_unverified: 0, units_uncheckpointed: 0,
+      nothing_happened: false,
+      lines: [
+        { provenance: "Verified", text: "u1-router: 2 check(s) passed (tests, build)" },
+        { provenance: "Verified", text: "u2-content-loader: 2 check(s) passed (tests, build)" },
+        { provenance: "Verified", text: "u3-search-index: 3 check(s) passed (tests, build, lint)" },
+        { provenance: "Verified", text: "u4-nav: 2 check(s) passed (tests, build)" },
+        { provenance: "Recorded", text: "checkpoint a10f77c (u1-router) — `git show a10f77c` to read it" },
+        { provenance: "Recorded", text: "checkpoint b921de4 (u2-content-loader) — `git show b921de4` to read it" },
+        { provenance: "Recorded", text: "checkpoint c33ab08 (u3-search-index) — `git show c33ab08` to read it" },
+        { provenance: "Recorded", text: "checkpoint d5e6f21 (u4-nav) — `git show d5e6f21` to read it" },
+        { provenance: "Estimated", text: "~64 KB of file content was not re-sent because the files were unchanged (~16000 tokens, at a rough 4 bytes per token)" },
+      ],
+      checkpoints: [["a10f77c9d2", "u1-router"], ["b921de4a6f", "u2-content-loader"], ["c33ab08e11", "u3-search-index"], ["d5e6f2103c", "u4-nav"]],
+    },
+    status: statusFor({ state: "done", state_meaning: "finished, all validators passed", waiting_for_you: false, spent_usd: 6.10 }),
+  },
+  {
+    id: "unverified",
+    label: "Nobody checked — not verified",
+    report: {
+      mission_id: "scratch-experiments",
+      units_completed: 0, units_failed: 0, units_unverified: 3, units_uncheckpointed: 0,
+      nothing_happened: false,
+      lines: [
+        { provenance: "Recorded", text: "u1-parser: NOT VERIFIED — no validators ran, so nothing about this unit is known. Add validators to .agentrelay/config.json" },
+        { provenance: "Recorded", text: "u2-lexer: NOT VERIFIED — no validators ran, so nothing about this unit is known. Add validators to .agentrelay/config.json" },
+        { provenance: "Recorded", text: "u3-emit: NOT VERIFIED — no validators ran, so nothing about this unit is known. Add validators to .agentrelay/config.json" },
+      ],
+      checkpoints: [],
+    },
+    status: statusFor({ state: "done", state_meaning: "finished, all validators passed", waiting_for_you: false, spent_usd: 2.30,
+      budget: "No spending cap is set. AgentRelay will not stop the run on cost.",
+      isolation: "Isolation is OFF. The agent runs directly on this machine, with your network and your files." }),
+  },
+  {
+    id: "nothing",
+    label: "Nothing ran",
+    report: {
+      mission_id: "nightly-auth-refactor",
+      units_completed: 0, units_failed: 0, units_unverified: 0, units_uncheckpointed: 0,
+      nothing_happened: true,
+      lines: [],
+      checkpoints: [],
+    },
+    status: statusFor({ state: "failed", state_meaning: "ended without completing", waiting_for_you: false, spent_usd: 0, missions: 1 }),
+  },
+  {
+    id: "blocked",
+    label: "Blocked a push, now rate-limited",
+    report: {
+      mission_id: "api-rate-limiter",
+      units_completed: 1, units_failed: 0, units_unverified: 0, units_uncheckpointed: 0,
+      nothing_happened: false,
+      lines: [
+        { provenance: "Verified", text: "u1-buckets: 2 check(s) passed (tests, build)" },
+        { provenance: "Recorded", text: "checkpoint 7c1b9f0 (u1-buckets) — `git show 7c1b9f0` to read it" },
+        { provenance: "Recorded", text: "BLOCKED by no_push: the agent tried guard.no_push — git push origin main. The turn was stopped." },
+        { provenance: "Verified", text: "the agent reported that its Bash call was refused and never ran" },
+        { provenance: "Estimated", text: "possible drift from the task — touched files outside the declared scope: infra/deploy.yaml" },
+      ],
+      checkpoints: [["7c1b9f0d34", "u1-buckets"]],
+    },
+    status: statusFor({ state: "rate_limited", state_meaning: "out of quota; will resume when the window reopens", waiting_for_you: false, spent_usd: 11.80 }),
+  },
+];
+
+/* ================================================================== *
+ * Live connection. The token is held here in a closure and never leaves
+ * memory — not localStorage, not the DOM, not a committed file.
+ * ================================================================== */
+
+const conn = { addr: null, token: null };
+
+async function fetchStatus() {
+  // GET /status needs the bearer token; the daemon checks it before reading a byte.
+  const res = await fetch("http://" + conn.addr + "/status", {
+    headers: { "Authorization": "Bearer " + conn.token },
+    cache: "no-store",
+  });
+  if (res.status === 401) throw new Error("The token was rejected (401). Re-copy it from .agentrelay/ipc.json.");
+  if (!res.ok) throw new Error("The daemon answered " + res.status + ".");
+  return res.json();
+}
+
+async function checkHealth(addr) {
+  // /health needs no auth — a cheap way to prove something is actually there.
+  const res = await fetch("http://" + addr + "/health", { cache: "no-store" });
+  return res.ok;
+}
+
+/* ================================================================== *
+ * Rendering
+ * ================================================================== */
+
+const state = { mode: "demo", scenarioId: SCENARIOS[0].id, report: null, status: null };
+
+function currentScenario() { return SCENARIOS.find(s => s.id === state.scenarioId) || SCENARIOS[0]; }
+
+/* The morning answer. Attention if the daemon's own needs_attention() would be
+   true (a unit failed / went unverified / lost its restore point) OR the mission
+   is waiting on a person. Those are exactly the daemon's two "look now" signals;
+   we do not add our own. */
+function computeAnswer(report, status) {
+  const reasons = [];
+  let level = "calm";
+
+  if (report && report.nothing_happened) {
+    return {
+      level: "neutral",
+      verdict: "Nothing ran",
+      mark: "—",
+      headline: "No units, no checkpoints, no validators. If you expected work, something stopped before it started.",
+      reasons: ["Check the daemon: run `agentrelay status`."],
+    };
+  }
+
+  if (report) {
+    if (report.units_failed > 0) reasons.push(report.units_failed + " unit(s) FAILED — the work is uncommitted, in your working tree.");
+    if (report.units_unverified > 0) reasons.push(report.units_unverified + " unit(s) NOT VERIFIED — no validators ran, so nothing is known about them.");
+    if (report.units_uncheckpointed > 0) reasons.push(report.units_uncheckpointed + " unit(s) passed but have NO restore point.");
+  }
+  if (status && status.waiting_for_you) {
+    reasons.push("The mission is " + status.state_meaning);
+  }
+  // A mission that ended without completing wants a person even though nobody is
+  // being "waited on" — it is over and it did not succeed. In live mode this is the
+  // only unit-level bad news /status can carry, so we must not read it as calm.
+  else if (status && status.state === "failed" && !(report && report.nothing_happened)) {
+    reasons.push("The mission " + status.state_meaning + ".");
+  }
+
+  if (reasons.length > 0) {
+    level = "attention";
+    return {
+      level,
+      verdict: "Yes — you're needed",
+      mark: "!",
+      headline: report ? headlineFor(report) : ("The mission is " + status.state_meaning + "."),
+      reasons,
+    };
+  }
+
+  // Calm — but say WHY it is calm, and whether it moves on its own.
+  const selfRuns = status && (status.state === "running" || status.state === "rate_limited");
+  return {
+    level: "calm",
+    verdict: "No action needed",
+    mark: "✓",
+    headline: report ? headlineFor(report) : (status ? "Live status only — see the note below." : ""),
+    reasons: selfRuns
+      ? ["It is " + status.state_meaning + " — it will continue on its own."]
+      : (status ? ["State: " + status.state_meaning + "."] : []),
+  };
+}
+
+/* Re-implements report.rs headline() so the phone headline and this screen agree. */
+function headlineFor(r) {
+  if (r.nothing_happened) return "AgentRelay: nothing ran overnight";
+  if (r.units_failed > 0) return "AgentRelay: " + r.units_completed + " unit(s) done, " + r.units_failed + " FAILED — work left uncommitted for you";
+  if (r.units_unverified > 0) return "AgentRelay: " + r.units_completed + " unit(s) done, " + r.units_unverified + " NOT VERIFIED — no validators ran";
+  if (r.units_uncheckpointed > 0) return "AgentRelay: " + r.units_completed + " unit(s) passed but " + r.units_uncheckpointed + " has NO restore point";
+  return "AgentRelay: " + r.units_completed + " unit(s) done, all validators passed";
+}
+
+function renderAnswer(a) {
+  const box = document.getElementById("answer");
+  box.className = "answer " + a.level;
+  box.innerHTML = "";
+  box.appendChild(el("div", { class: "verdict" }, [
+    el("span", { class: "mark", "aria-hidden": "true", text: a.mark }),
+    el("span", { text: a.verdict }),
+  ]));
+  if (a.headline) box.appendChild(el("p", { class: "headline", text: a.headline }));
+  if (a.reasons && a.reasons.length) {
+    const ul = el("ul");
+    a.reasons.forEach(r => ul.appendChild(el("li", { text: r })));
+    box.appendChild(ul);
+  }
+}
+
+/* ---- Provenance legend: a key the reader can trust, always on the page. ---- */
+function legendCard() {
+  const card = el("section", { class: "card", "aria-labelledby": "legendH" });
+  card.appendChild(el("h2", { id: "legendH", text: "How to read the evidence" }));
+  const wrap = el("div", { class: "legend" });
+  const items = [
+    ["VERIFIED", "A command ran and its exit code decided it. Evidence — not the agent's word."],
+    ["RECORDED", "The supervisor saw it directly: a commit exists, a guard fired, a file is dirty."],
+    ["ESTIMATED", "Computed from a rule of thumb. Never to be read as a measurement."],
+  ];
+  items.forEach(([tag, desc]) => {
+    const item = el("div", { class: "item" });
+    item.appendChild(provChip(tag));
+    item.appendChild(el("p", { text: desc }));
+    wrap.appendChild(item);
+  });
+  card.appendChild(wrap);
+  return card;
+}
+
+/* ---- Unit tallies ---- */
+function talliesCard(r) {
+  const card = el("section", { class: "card", "aria-labelledby": "tallyH" });
+  card.appendChild(el("h2", { id: "tallyH", text: "Units overnight" }));
+  const grid = el("div", { class: "tallies" });
+  const mk = (n, k, glyph, cls) => {
+    const t = el("div", { class: "tally" + (cls ? " " + cls : "") });
+    t.appendChild(el("div", { class: "n", text: String(n) }));
+    t.appendChild(el("div", { class: "k" }, [el("span", { "aria-hidden": "true", text: glyph }), el("span", { text: k })]));
+    return t;
+  };
+  grid.appendChild(mk(r.units_completed, "done & checkpointed", "✓", null));
+  grid.appendChild(mk(r.units_failed, "failed", "✗", r.units_failed > 0 ? "warn" : null));
+  grid.appendChild(mk(r.units_unverified, "not verified", "?", r.units_unverified > 0 ? "wait" : null));
+  grid.appendChild(mk(r.units_uncheckpointed, "no restore point", "△", r.units_uncheckpointed > 0 ? "wait" : null));
+  card.appendChild(grid);
+  card.appendChild(el("p", { class: "muted", text: "\"Not verified\" is deliberately separate from \"done\": nobody proved it works, so it is not counted as if they had." }));
+  return card;
+}
+
+/* ---- Report lines ---- */
+function linesCard(r) {
+  const card = el("section", { class: "card", "aria-labelledby": "linesH" });
+  card.appendChild(el("h2", { id: "linesH", text: "Every line, and where it came from" }));
+  if (!r.lines.length) {
+    card.appendChild(el("p", { class: "muted", text: "No lines to report." }));
+    return card;
+  }
+  const ul = el("ul", { class: "lines" });
+  r.lines.forEach(line => {
+    const li = el("li");
+    li.appendChild(provChip(provTag(line.provenance)));
+    li.appendChild(el("span", { class: "txt", text: line.text }));
+    ul.appendChild(li);
+  });
+  card.appendChild(ul);
+  return card;
+}
+
+/* ---- State ---- */
+function stateCard(s) {
+  const card = el("section", { class: "card", "aria-labelledby": "stateH" });
+  card.appendChild(el("h2", { id: "stateH", text: "State" }));
+
+  // The daemon's own distinctions: needs a person vs resumes itself vs in progress.
+  const needsPerson = s.waiting_for_you;
+  const selfRuns = s.state === "running" || s.state === "rate_limited";
+  const boxCls = needsPerson ? "statebox wait" : (selfRuns ? "statebox selfrun" : "statebox");
+
+  const box = el("div", { class: boxCls });
+  const glyph = needsPerson ? "⏸" : (selfRuns ? "▶" : "■");
+  box.appendChild(el("span", { class: "badge" }, [
+    el("span", { "aria-hidden": "true", text: glyph }),
+    el("span", { text: s.state }),
+  ]));
+  box.appendChild(el("span", { class: "meaning", text: s.state_meaning }));
+  card.appendChild(box);
+
+  // The "it will not continue by itself" case must be loud and unmistakable.
+  if (needsPerson) {
+    card.appendChild(el("div", { class: "loud", role: "alert" }, [
+      el("span", { "aria-hidden": "true", text: "⏸" }),
+      el("span", { text: "This will not continue by itself. It is stopped until you act." }),
+    ]));
+  }
+  return card;
+}
+
+/* ---- Spending. spent_usd is a real ledger figure (RECORDED); the cap arrives as
+   prose. We parse a mission-cap dollar figure ONLY to draw a bar, and fall back to
+   the sentence when there is none — we never invent a ceiling to fill a bar. ---- */
+function parseMissionCap(budgetText) {
+  const m = /\$([0-9]+(?:\.[0-9]+)?)\s+for this mission/.exec(budgetText || "");
+  return m ? parseFloat(m[1]) : null;
+}
+
+function spendingCard(s) {
+  const card = el("section", { class: "card", "aria-labelledby": "spendH" });
+  card.appendChild(el("h2", { id: "spendH", text: "Spending" }));
+
+  const fig = el("div", { class: "spend-figure" });
+  fig.appendChild(el("span", { class: "amt", text: "$" + Number(s.spent_usd).toFixed(2) }));
+  fig.appendChild(el("span", { class: "muted", text: "spent so far" }));
+  fig.appendChild(provChip("RECORDED"));
+  card.appendChild(fig);
+
+  const cap = parseMissionCap(s.budget);
+  const noCap = /No spending cap is set/.test(s.budget || "");
+
+  if (noCap || cap === null) {
+    // No numeric mission cap to bar against. Say it plainly — a cap you believe in
+    // but do not have is worse than none.
+    card.appendChild(el("div", { class: "nocap", role: noCap ? "note" : "note" }, [
+      el("span", { "aria-hidden": "true", text: noCap ? "∞" : "ℹ" }),
+      el("span", { text: s.budget }),
+    ]));
+  } else {
+    const frac = cap > 0 ? Math.min(s.spent_usd / cap, 1) : 0;
+    const pct = Math.round(frac * 100);
+    const near = frac >= 0.8 && frac < 1;
+    const over = s.spent_usd >= cap;
+    const bar = el("div", { class: "bar" + (over ? " over" : near ? " near" : ""), role: "img",
+      "aria-label": "$" + Number(s.spent_usd).toFixed(2) + " of $" + cap.toFixed(2) + " cap (" + pct + "%)" });
+    bar.appendChild(el("span", { style: "width:" + Math.max(frac * 100, 2) + "%" }));
+    card.appendChild(bar);
+    card.appendChild(el("p", { text: s.budget }));
+    card.appendChild(el("p", { class: "muted", text: over
+      ? "At or over the cap. The daemon stops before starting a turn that would cross it."
+      : "$" + (cap - s.spent_usd).toFixed(2) + " remaining. The cap is checked before each turn, not after." }));
+  }
+  return card;
+}
+
+/* ---- Checkpoints, with the exact command to undo one. ---- */
+function checkpointsCard(r) {
+  const card = el("section", { class: "card", "aria-labelledby": "cpH" });
+  card.appendChild(el("h2", { id: "cpH", text: "Checkpoints — how to go back" }));
+  if (!r.checkpoints || !r.checkpoints.length) {
+    card.appendChild(el("p", { class: "muted", text: "No restore points were created. Nothing to roll back to." }));
+    return card;
+  }
+  r.checkpoints.forEach(([sha, id]) => {
+    const short = String(sha).slice(0, 7);
+    const cp = el("div", { class: "cp" });
+    cp.appendChild(el("div", {}, [ provChip("RECORDED"), el("span", { class: "id", text: " " + id }) ]));
+    cp.appendChild(el("div", { class: "muted", text: "commit " + short }));
+
+    // undo_command() from checkpoint.rs — reset --keep, which REFUSES rather than
+    // discards if it would lose uncommitted work. We offer it; we never run it.
+    const cmdText = "git reset --keep " + short + "~1";
+    const cmd = el("div", { class: "cmd" });
+    cmd.appendChild(el("code", { text: cmdText }));
+    const btn = el("button", { type: "button", "aria-label": "Copy the undo command for " + id, text: "Copy" });
+    btn.addEventListener("click", () => copyText(cmdText, btn));
+    cmd.appendChild(btn);
+    cp.appendChild(cmd);
+    cp.appendChild(el("div", { class: "undo-note", text: "Undoes this unit. Refuses if that would lose uncommitted work — so it cannot delete anything. Read it first with " }));
+    cp.lastChild.appendChild(el("code", { text: "git show " + short }));
+
+    card.appendChild(cp);
+  });
+  return card;
+}
+
+/* ---- Isolation + notifications + engine: what leaves the machine, plainly. ---- */
+function environmentCard(s) {
+  const card = el("section", { class: "card", "aria-labelledby": "envH" });
+  card.appendChild(el("h2", { id: "envH", text: "What can leave this machine" }));
+  const dl = el("dl", { class: "kv" });
+  const row = (k, v) => { const d = el("div"); d.appendChild(el("dt", { text: k })); d.appendChild(el("dd", { text: v })); dl.appendChild(d); };
+  row("Isolation", s.isolation);
+  row("Notifications", s.notifications);
+  row("Engine", s.program);
+  row("Keep-awake", s.keep_awake ? "On — the machine is held awake during a run." : "Off.");
+  card.appendChild(dl);
+  return card;
+}
+
+async function copyText(text, btn) {
+  const done = (ok) => { const old = btn.textContent; btn.textContent = ok ? "Copied" : "Copy failed"; setTimeout(() => (btn.textContent = old), 1400); };
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); done(true); return; }
+  } catch (_) { /* fall through to the offline path below */ }
+  // file:// is not a secure context, so the Clipboard API is often unavailable.
+  // A textarea + execCommand keeps copy working with zero network and zero deps.
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "absolute"; ta.style.left = "-9999px";
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand("copy"); document.body.removeChild(ta); done(ok);
+  } catch (_) { done(false); }
+}
+
+/* ---- Live-mode notice: the report is not on the wire, and we say so. ---- */
+function liveReportNotice() {
+  const card = el("section", { class: "card", "aria-labelledby": "noticeH" });
+  card.appendChild(el("h2", { id: "noticeH", text: "The full report is not served over IPC" }));
+  card.appendChild(el("p", { text: "The daemon's HTTP surface exposes GET /status only — the live state, spending, and isolation shown above. The unit-by-unit morning report, its provenance lines, and the checkpoint list are produced by the command line:" }));
+  const cmd = el("div", { class: "cmd" });
+  cmd.appendChild(el("code", { text: "agentrelay report" }));
+  const btn = el("button", { type: "button", "aria-label": "Copy the report command", text: "Copy" });
+  btn.addEventListener("click", () => copyText("agentrelay report", btn));
+  cmd.appendChild(btn);
+  card.appendChild(cmd);
+  card.appendChild(el("p", { class: "muted", text: "This screen will not invent those numbers from status alone. Switch to demo mode to see the full report layout with fixture data." }));
+  return card;
+}
+
+function render() {
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+
+  let report, status;
+  if (state.mode === "demo") {
+    const sc = currentScenario();
+    report = sc.report; status = sc.status;
+  } else {
+    report = null; status = state.status;
+  }
+
+  renderAnswer(computeAnswer(report, status));
+
+  main.appendChild(legendCard());
+
+  if (report) {
+    main.appendChild(talliesCard(report));
+    main.appendChild(linesCard(report));
+  }
+  if (status) main.appendChild(stateCard(status));
+  if (status) main.appendChild(spendingCard(status));
+  if (report) {
+    main.appendChild(checkpointsCard(report));
+  } else {
+    main.appendChild(liveReportNotice());
+  }
+  if (status) main.appendChild(environmentCard(status));
+
+  // Mode pill + footer source note.
+  const modeText = document.getElementById("modeText");
+  const sourceNote = document.getElementById("sourceNote");
+  if (state.mode === "demo") {
+    modeText.textContent = "demo";
+    document.getElementById("scenario").hidden = false;
+    document.getElementById("refreshBtn").hidden = true;
+    document.getElementById("connectBtn").hidden = false;
+    sourceNote.textContent = "Demo mode: everything above is fixture data so this page can be judged without a running daemon. No daemon was contacted.";
+  } else {
+    modeText.textContent = "live · " + conn.addr;
+    document.getElementById("scenario").hidden = true;
+    document.getElementById("refreshBtn").hidden = false;
+    document.getElementById("connectBtn").hidden = false;
+    document.getElementById("connectBtn").textContent = "Disconnect";
+    sourceNote.textContent = "Live mode: the panels above are GET /status from the daemon at " + conn.addr + ". Nothing else was fetched.";
+  }
+}
+
+/* ================================================================== *
+ * Wiring
+ * ================================================================== */
+
+function initScenarioSelect() {
+  const sel = document.getElementById("scenario");
+  SCENARIOS.forEach(sc => sel.appendChild(el("option", { value: sc.id, text: sc.label })));
+  sel.value = state.scenarioId;
+  sel.addEventListener("change", () => { state.scenarioId = sel.value; render(); });
+}
+
+function wireConnect() {
+  const dlg = document.getElementById("connectDlg");
+  const connectBtn = document.getElementById("connectBtn");
+  const errBox = document.getElementById("connectErr");
+
+  connectBtn.addEventListener("click", () => {
+    if (state.mode === "live") {
+      // Disconnect: drop the token from memory and return to demo.
+      conn.addr = null; conn.token = null;
+      state.mode = "demo"; state.status = null;
+      connectBtn.textContent = "Connect to a daemon…";
+      render();
+      return;
+    }
+    errBox.hidden = true;
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    document.getElementById("addr").focus();
+  });
+
+  document.getElementById("cancelConnect").addEventListener("click", () => dlg.close());
+
+  document.getElementById("doConnect").addEventListener("click", async () => {
+    const addr = document.getElementById("addr").value.trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
+    const token = document.getElementById("token").value;
+    errBox.hidden = true;
+    if (!addr || !token) { errBox.textContent = "Both the address and the token are needed."; errBox.hidden = false; return; }
+    try {
+      const ok = await checkHealth(addr);
+      if (!ok) throw new Error("No daemon answered /health at that address.");
+      conn.addr = addr; conn.token = token;           // token lives here in memory only
+      state.status = await fetchStatus();
+      state.mode = "live";
+      // Clear the token field so it is not left sitting in the DOM.
+      document.getElementById("token").value = "";
+      dlg.close();
+      render();
+    } catch (e) {
+      errBox.textContent = String(e.message || e);
+      errBox.hidden = false;
+    }
+  });
+
+  document.getElementById("refreshBtn").addEventListener("click", async () => {
+    try { state.status = await fetchStatus(); render(); }
+    catch (e) {
+      // A daemon that went away must not leave stale numbers looking live.
+      conn.addr = null; conn.token = null; state.mode = "demo"; state.status = null;
+      document.getElementById("connectBtn").textContent = "Connect to a daemon…";
+      render();
+      alert("Lost the daemon: " + (e.message || e) + "\nBack to demo mode.");
+    }
+  });
+}
+
+initScenarioSelect();
+wireConnect();
+render();
+</script>
+</body>
+</html>
