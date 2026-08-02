@@ -208,6 +208,18 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
     // What the supervisor refused. A guard that fired is the most important thing a
     // night can report: it means the agent tried to do something you had ruled out.
     for e in store.get_events(mission_id).unwrap_or_default() {
+        // The agent's own confirmation that a call did not execute. Stronger than
+        // our record of refusing it, so it is labelled VERIFIED.
+        if e.kind == "tool.denied" {
+            let tool = e.payload.get("tool").and_then(|v| v.as_str()).unwrap_or("a tool");
+            lines.push(Line {
+                provenance: Provenance::Verified,
+                text: format!(
+                    "the agent reported that its {tool} call was refused and never ran"
+                ),
+            });
+            continue;
+        }
         if e.kind != "guard.violation" {
             continue;
         }

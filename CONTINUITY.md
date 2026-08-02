@@ -205,6 +205,24 @@ NEXT with claude installed: verify the PreToolUse hook actually blocks (run clau
 with install-hook active and a prompt that would trip a guard), then use
 latest_quota_reset to schedule units rather than walk into the wall.
 
+KILL-TEST PASSED (2026-08-02): the PreToolUse hook BLOCKS a real Claude tool call.
+Live run, claude 2.1.220, forbid_path guard on .env, --allowedTools Write:
+  - Claude issued Write for .env
+  - tool_result came back is_error:true with our text, and
+    tool_result_meta.non_execution_kind == "permission-rule" (it never ran)
+  - the file does not exist
+  - Claude complied and did not attempt a workaround (the 'do not work around it'
+    wording in the refusal is doing real work)
+  - the result event carries permission_denials:[{tool_name,tool_use_id,tool_input}]
+Watchtower layer-1 is now genuinely deterministic, not advisory. Also parsed
+permission_denials -> AgentEvent::ToolDenied, stored as kind `tool.denied` and
+reported as VERIFIED (the agent confirming a call never ran is stronger evidence
+than our own note that we refused it). 147 cargo tests.
+
+NEXT: use latest_quota_reset to schedule units around the wall instead of walking
+into it; keepawake per-thread fix; Phase-2 (Mission-Contract state machine,
+Isolation-Ring, cost ledger + budget kill-switch).
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

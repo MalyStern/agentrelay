@@ -98,6 +98,17 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         provider: Option<String>,
     },
+    /// The provider confirming a tool call did NOT run.
+    ///
+    /// Emitted from the `permission_denials` list the agent reports at the end of a
+    /// turn. This is the agent's own account of what it was refused, which makes it
+    /// stronger evidence than our record of having refused it — one says "we said
+    /// no", the other says "it never happened".
+    ToolDenied {
+        tool: String,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        args: serde_json::Value,
+    },
     /// The provider told us where the wall is while we are still well clear of it.
     ///
     /// Distinct from `RateLimited` on purpose: this one must NOT trigger a resume

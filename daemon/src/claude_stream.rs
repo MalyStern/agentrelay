@@ -159,6 +159,29 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
         }
         "result" => {
             out.done = true;
+
+            // The provider's own list of what it refused to run. Verified against
+            // claude 2.1.220: when our PreToolUse hook denies a call, the result
+            // event carries
+            //   "permission_denials":[{"tool_name":"Write","tool_use_id":…,"tool_input":…}]
+            // and the tool_result is flagged `non_execution_kind: "permission-rule"`.
+            //
+            // This is better evidence than our own record of having said no: it is
+            // the agent confirming the tool never ran. The morning report can state
+            // it as fact rather than as our side of the story.
+            if let Some(denials) = obj.get("permission_denials").and_then(|v| v.as_array()) {
+                for d in denials {
+                    let tool = d
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown tool")
+                        .to_string();
+                    out.events.push(AgentEvent::ToolDenied {
+                        tool,
+                        args: d.get("tool_input").cloned().unwrap_or(Value::Null),
+                    });
+                }
+            }
             let usage = map_usage(obj.get("usage").unwrap_or(&Value::Null));
             let subtype = obj.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
             let is_error = obj.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false)
@@ -303,6 +326,42 @@ mod tests {
             |e| matches!(e, AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited")));
         let r2 = parse_claude_line(&json!({"type":"result","is_error":true,"error":"boom"}));
         assert!(matches!(&r2.events[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error"));
+    }
+
+    #[test]
+    fn the_providers_own_denial_record_is_read_back() {
+        // Copied from a live run where our PreToolUse hook blocked a real Write.
+        // The agent reports what it was refused; that is the agent confirming the
+        // tool never ran, which is stronger than our own note that we said no.
+        let r = parse_claude_line(&json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": "blocked",
+            "permission_denials": [{
+                "tool_name": "Write",
+                "tool_use_id": "toolu_017T89",
+                "tool_input": {"file_path": "C:\\proj\\.env", "content": "FOO=bar"}
+            }]
+        }));
+        match r.events.iter().find(|e| matches!(e, AgentEvent::ToolDenied { .. })) {
+            Some(AgentEvent::ToolDenied { tool, args }) => {
+                assert_eq!(tool, "Write");
+                assert!(args.get("file_path").is_some(), "the attempt is kept, for the report");
+            }
+            _ => panic!("no ToolDenied in {:?}", r.events),
+        }
+        // A clean turn still completes: a denial is not a failure of the turn.
+        assert!(r.events.iter().any(|e| matches!(e, AgentEvent::TurnCompleted { .. })));
+    }
+
+    #[test]
+    fn a_turn_with_no_denials_produces_none() {
+        let r = parse_claude_line(&json!({
+            "type": "result", "subtype": "success", "is_error": false,
+            "result": "ok", "permission_denials": []
+        }));
+        assert!(!r.events.iter().any(|e| matches!(e, AgentEvent::ToolDenied { .. })));
     }
 
     #[test]

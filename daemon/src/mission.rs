@@ -93,6 +93,19 @@ pub async fn run_turn_supervised(
                     outcome.completed = true;
                 }
             }
+            // The agent confirming a call never ran. Recorded under its own kind so
+            // the report can say "the provider refused it" rather than only "we
+            // told it no" — the difference matters when you are deciding in the
+            // morning whether a guard actually held.
+            AgentEvent::ToolDenied { tool, .. } => {
+                let _ = store.append_event(&AppendEvent {
+                    mission_id: Some(mission_id.to_string()),
+                    actor: "provider".to_string(),
+                    kind: "tool.denied".to_string(),
+                    payload: serde_json::json!({ "tool": tool }),
+                    seq_in_turn: Some(outcome.events_seen as i64 - 1),
+                });
+            }
             // Healthy heartbeat: record where the wall is and carry on. Acting on it
             // would abort a turn that has nothing wrong with it.
             AgentEvent::QuotaHint { reset_at, window, provider } => {
