@@ -119,8 +119,18 @@ impl MorningReport {
 pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> MorningReport {
     let mut lines = Vec::new();
 
-    let checkpoints = crate::checkpoint::list(cwd, 50).unwrap_or_default();
     let units = store.list_work_units(mission_id).unwrap_or_default();
+
+    // Scope the checkpoints to THIS mission. `checkpoint::list` reads git history,
+    // which after the first successful night contains every checkpoint ever made —
+    // so last week's work reappeared in this morning's report, and
+    // `nothing_happened` could never be true again however quiet the night was.
+    let unit_ids: std::collections::HashSet<&str> = units.iter().map(|u| u.id.as_str()).collect();
+    let checkpoints: Vec<(String, String)> = crate::checkpoint::list(cwd, 200)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, id)| unit_ids.contains(id.as_str()))
+        .collect();
 
     let mut completed = 0usize;
     let mut failed = 0usize;
@@ -335,11 +345,32 @@ mod tests {
     }
 
     #[test]
+    fn last_weeks_checkpoints_do_not_reappear_in_this_mornings_report() {
+        // checkpoint::list reads git history, so an unscoped report showed every
+        // checkpoint ever made and could never say "nothing happened" again.
+        let store = Store::open_in_memory().unwrap();
+        let cwd = tmp_repo();
+        std::fs::write(std::path::Path::new(&cwd).join("old.txt"), "old\n").unwrap();
+        crate::checkpoint::create(&cwd, "old-unit", "last week").unwrap();
+
+        // A fresh mission that has done nothing at all.
+        let r = build(&store, "tonight", &cwd, 0);
+        assert!(r.checkpoints.is_empty(), "{:?}", r.checkpoints);
+        assert!(r.nothing_happened, "{}", r.render());
+        assert!(r.headline().contains("nothing ran"));
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
     fn checkpoints_are_recorded_and_come_with_a_way_to_read_them() {
         let store = Store::open_in_memory().unwrap();
         let cwd = tmp_repo();
         std::fs::write(std::path::Path::new(&cwd).join("work.txt"), "w\n").unwrap();
         crate::checkpoint::create(&cwd, "u1", "unit 1: the work").unwrap();
+        // The unit has to belong to this mission for its checkpoint to be ours to
+        // report — that scoping is what keeps old nights out of this morning.
+        store.upsert_work_unit(&unit("u1")).unwrap();
+        store.save_validation("u1", &result("tests", true)).unwrap();
 
         let r = build(&store, "m1", &cwd, 0);
         let cp_line = r.lines.iter().find(|l| l.text.contains("checkpoint")).expect("listed");

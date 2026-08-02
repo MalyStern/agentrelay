@@ -52,13 +52,19 @@ impl ProcessGroup {
         {
             cmd.process_group(0); // the child becomes its own group leader
         }
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| AgentRelayError::new(ErrorCode::ProcessSpawnFailed, e.to_string()))?;
         #[cfg(windows)]
         {
             if let Some(pid) = child.id() {
-                win::assign_pid_to_job(self.inner.job, pid)?;
+                // If the assignment fails the child is ALREADY RUNNING and is in no
+                // kill-group: returning Err here used to drop the Child and leave a
+                // process nothing could reach. Kill it before reporting the failure.
+                if let Err(e) = win::assign_pid_to_job(self.inner.job, pid) {
+                    let _ = child.start_kill();
+                    return Err(e);
+                }
             }
         }
         #[cfg(unix)]
@@ -79,15 +85,32 @@ impl ProcessGroup {
         #[cfg(unix)]
         {
             let pgid = self.inner.pgid.load(std::sync::atomic::Ordering::SeqCst);
-            if pgid > 0 {
-                // negative pid targets the whole process group.
-                let r = unsafe { libc::kill(-pgid, libc::SIGKILL) };
-                if r != 0 {
-                    return Err(AgentRelayError::new(
-                        ErrorCode::ProcessStopIncomplete,
-                        format!("killpg {pgid} failed"),
-                    ));
+            // pgid == 0 means nothing was ever spawned into this group, OR the spawn
+            // failed to report a pid. Returning Ok() there claimed a stop we never
+            // performed — the one thing §ז.3 says a stop must never do. Say so.
+            if pgid <= 0 {
+                return Err(AgentRelayError::new(
+                    ErrorCode::ProcessStopIncomplete,
+                    "no process group to kill — the group was never populated, so this \
+                     is not a confirmed stop"
+                        .to_string(),
+                ));
+            }
+            // negative pid targets the whole process group.
+            let r = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+            if r != 0 {
+                // ESRCH means no such process group: everything in it is already
+                // gone, which is precisely the state kill_tree exists to reach.
+                // Reporting that as an incomplete stop had the caller chasing a
+                // success.
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ESRCH) {
+                    return Ok(());
                 }
+                return Err(AgentRelayError::new(
+                    ErrorCode::ProcessStopIncomplete,
+                    format!("killpg {pgid} failed: {err}"),
+                ));
             }
             Ok(())
         }
@@ -99,6 +122,19 @@ impl Drop for ProcessGroup {
     fn drop(&mut self) {
         // Closing the job handle with KILL_ON_JOB_CLOSE also reaps survivors.
         win::close_handle(self.inner.job);
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        // Windows gets this for free: closing the Job with KILL_ON_JOB_CLOSE reaps
+        // the tree. Unix had no Drop at all, so a ProcessGroup that went out of
+        // scope — which is what happens on every interrupted turn, since the
+        // adapter is created and dropped per turn — left `claude` and everything it
+        // had started running forever. A supervisor that leaks the processes it
+        // supervises is worse than no supervisor: the user believes it stopped.
+        let _ = self.kill_tree();
     }
 }
 

@@ -144,12 +144,23 @@ worst were real and reproduced. Fixed in this pass:
   11. truncate() sliced by byte index -> panic on multi-byte output (tsc/vitest/Hebrew).
 119 cargo tests.
 
-STILL OPEN from the audit (next): #12 rename/UTF-8 paths in porcelain (use -z),
-#13 IPC token must fail if getrandom fails + cap the body before auth, Unix
-ProcessGroup has no Drop (leaks the tree; Windows does), keepawake is per-thread
-but held across awaits, report pulls ALL git checkpoints not just this mission's,
-guard violations are not written to events/report, and install_guards is a no-op
-so Watchtower-1 is advisory (kill-after-the-fact) rather than a PreToolUse block.
+AUDIT ROUND 2 (2026-08-02): Unix ProcessGroup now has a Drop that kills the tree
+(Windows had one via KILL_ON_JOB_CLOSE; Unix leaked `claude` and everything it
+spawned on every interrupted turn). kill_tree no longer claims success when the
+group was never populated (pgid==0), and treats ESRCH — already dead — as the
+success it is. A failed Job assignment on Windows now kills the already-running
+child instead of dropping it unreachable. IPC: gen_token() returns Result and the
+server refuses to listen without real entropy (it used to fall back to 32 zero
+bytes guarding POST /run); auth is checked BEFORE the body is read and the body is
+capped at 1 MB (413). report scopes checkpoints to the mission's own units — git
+history held every checkpoint ever made, so last week's showed up this morning and
+`nothing_happened` could never be true again. 123 cargo tests.
+
+STILL OPEN from the audit: #12 rename/UTF-8 paths in porcelain (use -z + core.quotePath=false),
+keepawake is per-thread but held across awaits (use PowerCreateRequest), guard
+violations are not written to events/report, and install_guards is a no-op so
+Watchtower-1 is advisory (kill-after-the-fact) rather than a PreToolUse block —
+the biggest remaining gap vs plan §ז.4.
 
 ## Done log (most recent first)
 

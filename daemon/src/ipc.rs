@@ -21,15 +21,31 @@ pub struct IpcHandle {
 }
 
 /// A 256-bit hex token for loopback auth.
-pub fn gen_token() -> String {
+///
+/// Fails rather than returning a weak token. Ignoring the getrandom error left the
+/// buffer as 32 zero bytes, i.e. a completely predictable token protecting POST
+/// /run — which executes an arbitrary prompt in an arbitrary directory. An entropy
+/// failure has to stop the server from listening, not quietly downgrade it.
+pub fn gen_token() -> Result<String> {
     let mut b = [0u8; 32];
-    let _ = getrandom::getrandom(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    getrandom::getrandom(&mut b).map_err(|e| {
+        AgentRelayError::new(
+            ErrorCode::Internal,
+            format!("no secure randomness available for the IPC token ({e}) — refusing to listen"),
+        )
+    })?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
+
+/// Largest request body we will read. The IPC surface takes a prompt and a path;
+/// nothing legitimate approaches this. Without a cap, an unauthenticated client on
+/// loopback could declare `Content-Length: 4000000000` and we would allocate until
+/// the daemon died — in the middle of the night, which is the whole point of it.
+const MAX_BODY: usize = 1024 * 1024;
 
 /// Bind and start serving. `bind` is e.g. "127.0.0.1:0" (ephemeral for tests).
 pub async fn serve(daemon: Arc<Mutex<Daemon>>, bind: &str) -> Result<IpcHandle> {
-    let token = gen_token();
+    let token = gen_token()?;
     let listener = TcpListener::bind(bind)
         .await
         .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
@@ -118,6 +134,20 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
         }
     }
 
+    // /health needs no auth.
+    if method == "GET" && path == "/health" {
+        return respond(&mut stream, 200, "OK", "{\"ok\":true}").await;
+    }
+    // Everything else requires the bearer token — checked BEFORE we read a byte of
+    // body. Reading first meant an unauthenticated caller could make us allocate
+    // whatever it asked for, and only then be told it was unauthorised.
+    if auth != format!("Bearer {token}") {
+        return respond(&mut stream, 401, "Unauthorized", "{\"error\":\"unauthorized\"}").await;
+    }
+    if content_length > MAX_BODY {
+        return respond(&mut stream, 413, "Payload Too Large", "{\"error\":\"body too large\"}").await;
+    }
+
     let mut body = buf[header_end..].to_vec();
     while body.len() < content_length {
         let n = stream.read(&mut tmp).await?;
@@ -125,17 +155,12 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
             break;
         }
         body.extend_from_slice(&tmp[..n]);
+        if body.len() > MAX_BODY {
+            return respond(&mut stream, 413, "Payload Too Large", "{\"error\":\"body too large\"}")
+                .await;
+        }
     }
     body.truncate(content_length);
-
-    // /health needs no auth.
-    if method == "GET" && path == "/health" {
-        return respond(&mut stream, 200, "OK", "{\"ok\":true}").await;
-    }
-    // Everything else requires the bearer token.
-    if auth != format!("Bearer {token}") {
-        return respond(&mut stream, 401, "Unauthorized", "{\"error\":\"unauthorized\"}").await;
-    }
 
     match (method.as_str(), path.as_str()) {
         ("GET", "/status") => {
@@ -197,6 +222,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Arc::new(Mutex::new(Daemon::init(&root).unwrap()))
+    }
+
+    #[test]
+    fn the_token_is_random_and_never_a_fallback() {
+        // The failure this pins: ignoring the getrandom error left 32 zero bytes —
+        // a fully predictable token guarding POST /run, which executes an arbitrary
+        // prompt in an arbitrary directory.
+        let a = gen_token().unwrap();
+        let b = gen_token().unwrap();
+        assert_eq!(a.len(), 64);
+        assert_ne!(a, b);
+        assert_ne!(a, "0".repeat(64));
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[tokio::test]
+    async fn an_unauthenticated_giant_body_is_refused_before_it_is_read() {
+        // Declaring a 4 GB body used to make us allocate it and only then check the
+        // token — a one-line way for anything on loopback to kill the daemon
+        // overnight.
+        let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
+        let (code, _) = request(
+            h.addr,
+            "POST /run HTTP/1.1\r\nHost: x\r\nContent-Length: 4000000000\r\n\r\n",
+        )
+        .await;
+        assert_eq!(code, 401, "no token, so it never gets as far as the body");
+        h.task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_giant_body_is_capped() {
+        let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
+        let (code, body) = request(
+            h.addr,
+            &format!(
+                "POST /run HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\nContent-Length: 4000000000\r\n\r\n",
+                h.token
+            ),
+        )
+        .await;
+        assert_eq!(code, 413, "{body}");
+        h.task.abort();
     }
 
     #[tokio::test]
