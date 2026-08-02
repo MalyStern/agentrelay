@@ -121,6 +121,9 @@ pub struct StatusReport {
     /// react after the fact, but not prevent), and that must be visible rather than
     /// assumed.
     pub blocking: String,
+    /// In plain words: whether a knowledge graph is built after a run, and — if asked
+    /// for but graphify isn't installed — that nothing will be built until it is.
+    pub graph: String,
 }
 
 /// The result of making sure the blocking hook is in place.
@@ -288,6 +291,7 @@ impl Daemon {
                       the supervisor reacts. Run `agentrelay install-hook` to arm it now."
                     .to_string(),
             },
+            graph: self.config.graph.describe(),
         }
     }
 

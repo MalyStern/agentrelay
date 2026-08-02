@@ -113,6 +113,17 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Build (or refresh) a knowledge graph of the workspace with graphify, and print
+    /// where it went. Free AST-only build unless --deep (which spends tokens). Does
+    /// nothing but say how to install graphify if it isn't on PATH.
+    Graph {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        /// Use graphify's LLM extraction (richer edges, but SPENDS TOKENS) instead of
+        /// the free AST-only build.
+        #[arg(long)]
+        deep: bool,
+    },
     /// The morning report: what actually happened overnight, with its sources.
     Report {
         #[arg(long, default_value = ".")]
@@ -227,6 +238,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!("{}", s.cloud);
             println!();
             println!("{}", s.schedule);
+            println!();
+            println!("knowledge graph: {}", s.graph);
             println!();
             println!("{} Spent so far: ${:.2}.", s.budget, s.spent_usd);
             Ok(())
@@ -573,6 +586,48 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 (None, None) => {}
             }
             Ok(())
+        }
+        Cmd::Graph { cwd, deep } => {
+            // Start from the workspace's configured graph settings if it's an
+            // AgentRelay workspace, so `flags` are honoured; otherwise sensible
+            // defaults. `--deep` on the command line forces the LLM path.
+            let mut cfg = Daemon::open(root)
+                .map(|d| d.config().graph.clone())
+                .unwrap_or_default();
+            cfg.after_run = true;
+            if deep {
+                cfg.deep = true;
+            }
+            if !agentrelay::graph::graphify_available() {
+                return Err(format!(
+                    "graphify is not installed — {}",
+                    agentrelay::graph::install_hint()
+                ));
+            }
+            println!(
+                "Building a knowledge graph of {cwd} with {} …",
+                if cfg.deep {
+                    "graphify extract (LLM — this spends tokens)"
+                } else {
+                    "graphify update (AST only — no token cost)"
+                }
+            );
+            let out = agentrelay::graph::build_graph(std::path::Path::new(&cwd), &cfg);
+            println!("  {}", out.note);
+            if let Some(p) = &out.html {
+                println!("  open:   {p}");
+            }
+            if let Some(p) = &out.report_md {
+                println!("  report: {p}");
+            }
+            if let Some(p) = &out.graph_json {
+                println!("  graph:  {p}");
+            }
+            if out.ran {
+                Ok(())
+            } else {
+                Err(out.note)
+            }
         }
         Cmd::Report {
             cwd,
