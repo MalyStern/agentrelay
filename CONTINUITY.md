@@ -181,6 +181,30 @@ is a Phase-0 kill-test needing ONE run against a real Claude — both spellings 
 both signals are emitted so a mismatch degrades rather than fails open. Also
 keepawake is per-thread but held across awaits (needs PowerCreateRequest).
 
+LIVE CONTRACT TEST (2026-08-02) - user installed claude 2.1.220, so the Phase-0
+contract test finally ran against the real thing. Two findings:
+
+1. WINDOWS BLOCKER: npm installs claude.cmd/claude.ps1 and NO claude.exe. Rust's
+   Command::new only appends .exe, so the daemon could never spawn Claude on
+   Windows and reported it as "not installed". New which.rs resolves via PATHEXT
+   and routes .cmd/.bat through cmd.exe, .ps1 through powershell. doctor now
+   prints the resolved path. Verified it finds ...
+pm\claude.cmd.
+
+2. THE PLAN'S CORE QUOTA ASSUMPTION WAS WRONG. The plan says Claude headless has
+   no live counter so quota handling must be reactive. It does have one: every
+   turn emits {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",
+   "resetsAt":<unix>,"rateLimitType":"five_hour"}} - where the wall is, BEFORE
+   hitting it. Added AgentEvent::QuotaHint (deliberately distinct from RateLimited
+   so a healthy heartbeat cannot abort a turn), parsed in claude_stream, persisted
+   via store.save_quota_snapshot/latest_quota_reset. Also confirmed: the usage
+   field names map_usage reads are correct, and assistant messages carry
+   `thinking` blocks that must not become reply text. 145 cargo tests.
+
+NEXT with claude installed: verify the PreToolUse hook actually blocks (run claude
+with install-hook active and a prompt that would trip a guard), then use
+latest_quota_reset to schedule units rather than walk into the wall.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
