@@ -291,6 +291,16 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
     }
 
     if let Ok(dirty) = crate::checkpoint::dirty_paths(cwd) {
+        // Exclude our own scaffolding. `.agentrelay/` (the config and the self-ignoring
+        // .gitignore that init writes) is always uncommitted in a fresh workspace, and
+        // it is the supervisor's bookkeeping, not the user's work-in-progress. Flagging
+        // it made a pristine, never-run workspace look like it had stray changes — and
+        // kept `nothing_happened` from being true, so the report never got to say the
+        // honest "nothing ran yet". The report describes the user's tree, not ours.
+        let dirty: Vec<String> = dirty
+            .into_iter()
+            .filter(|p| !p.replace('\\', "/").starts_with(".agentrelay/"))
+            .collect();
         if !dirty.is_empty() {
             lines.push(Line {
                 provenance: Provenance::Recorded,
@@ -384,6 +394,31 @@ mod tests {
         assert_eq!(r.units_completed, 0);
         assert!(r.render().contains("Nothing ran"));
         assert!(r.headline().contains("nothing ran"));
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn our_own_scaffolding_is_not_reported_as_the_users_stray_work() {
+        // A fresh workspace's only uncommitted files are .agentrelay/config.json and
+        // its .gitignore — ours, not the user's. They must not appear as "left
+        // uncommitted", and their presence must not stop `nothing_happened` from being
+        // true. Otherwise a never-run workspace looks like it has stray changes.
+        let store = Store::open_in_memory().unwrap();
+        let cwd = tmp_repo();
+        std::fs::create_dir_all(std::path::Path::new(&cwd).join(".agentrelay")).unwrap();
+        std::fs::write(std::path::Path::new(&cwd).join(".agentrelay").join("config.json"), "{}").unwrap();
+        std::fs::write(std::path::Path::new(&cwd).join(".agentrelay").join(".gitignore"), "*\n").unwrap();
+
+        let r = build(&store, "m1", &cwd, 0);
+        assert!(!r.render().contains(".agentrelay"), "our files leaked in: {}", r.render());
+        assert!(r.nothing_happened, "a workspace with only our files never ran: {}", r.render());
+        assert!(r.headline().contains("nothing ran"));
+
+        // …but a REAL uncommitted user file is still reported.
+        std::fs::write(std::path::Path::new(&cwd).join("mine.txt"), "work\n").unwrap();
+        let r2 = build(&store, "m1", &cwd, 0);
+        assert!(r2.render().contains("mine.txt"), "{}", r2.render());
+        assert!(!r2.nothing_happened);
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
