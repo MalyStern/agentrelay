@@ -48,6 +48,17 @@ cd daemon && cargo build --release
 Edit `.agentrelay/config.json` — the guards, the validators (your real `npm test` etc.),
 a spending cap, the scope — then work as normal. The hook does the rest.
 
+## Also included: a skill and MCP tools
+
+- **A skill** (`skills/agentrelay/`) that teaches an agent the correct *order* — `begin`
+  before touching files, `done` (validate → checkpoint) after, never call a unit done
+  on its own say-so, never work around a guard. The order is the safety.
+- **An MCP server** (`mcp/server.mjs`, dependency-free) that gives Claude real tools —
+  `agentrelay_status`, `agentrelay_report`, `agentrelay_checkpoints`,
+  `agentrelay_validate`, `agentrelay_fits` — instead of only slash commands, each
+  scoped to a workspace. If the engine is missing, the tools return a clear error
+  rather than a dead server.
+
 ## If the engine isn't installed, the plugin does no harm
 
 The hooks run through a small Node wrapper (`bin/guard.mjs`), so the plugin is

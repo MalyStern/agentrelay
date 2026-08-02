@@ -21,5 +21,7 @@
     "./commands/checkpoints.md",
     "./commands/fits.md"
   ],
-  "hooks": "./hooks/hooks.json"
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
 }
