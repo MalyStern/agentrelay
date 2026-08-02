@@ -1,0 +1,25 @@
+{
+  "name": "agentrelay",
+  "displayName": "AgentRelay",
+  "version": "0.1.0",
+  "description": "Supervise Claude Code with guards that BLOCK forbidden tool calls before they run, validators that gate 'done' on real evidence, and git checkpoints. Installing the plugin installs the guards — no settings.json editing.",
+  "author": {
+    "name": "MalyStern",
+    "url": "https://github.com/MalyStern"
+  },
+  "homepage": "https://github.com/MalyStern/agentrelay",
+  "repository": "https://github.com/MalyStern/agentrelay",
+  "license": "MIT",
+  "keywords": ["agent", "guard", "supervision", "checkpoint", "budget", "hook"],
+  "defaultEnabled": false,
+  "commands": [
+    "./commands/status.md",
+    "./commands/init.md",
+    "./commands/report.md",
+    "./commands/validate.md",
+    "./commands/done.md",
+    "./commands/checkpoints.md",
+    "./commands/fits.md"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

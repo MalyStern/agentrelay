@@ -1,0 +1,16 @@
+{
+  "name": "malystern",
+  "owner": {
+    "name": "MalyStern",
+    "url": "https://github.com/MalyStern"
+  },
+  "description": "AgentRelay — supervise Claude Code with real guards, evidence-gated completion, and git checkpoints.",
+  "plugins": [
+    {
+      "name": "agentrelay",
+      "source": "./plugin",
+      "description": "Installing this installs the guards: a PreToolUse hook that BLOCKS a forbidden tool call before it runs (verified against a live Claude), plus slash commands wrapping the agentrelay CLI. Requires the agentrelay binary on PATH.",
+      "version": "0.1.0"
+    }
+  ]
+}
