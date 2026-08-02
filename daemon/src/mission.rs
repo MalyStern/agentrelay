@@ -93,6 +93,15 @@ pub async fn run_turn_supervised(
                     outcome.completed = true;
                 }
             }
+            // Healthy heartbeat: record where the wall is and carry on. Acting on it
+            // would abort a turn that has nothing wrong with it.
+            AgentEvent::QuotaHint { reset_at, window, provider } => {
+                let _ = store.save_quota_snapshot(
+                    provider.as_deref().unwrap_or("claude"),
+                    &window.map(|w| format!("{w:?}")).unwrap_or_else(|| "unknown".into()),
+                    reset_at,
+                );
+            }
             AgentEvent::RateLimited { reset_at, .. } => {
                 outcome.resume_plan =
                     Some(plan_resume_after_rate_limit(reset_at, now_utc, None, None));
@@ -154,6 +163,32 @@ mod tests {
         assert_eq!(out.violations.len(), 1);
         assert_eq!(out.violations[0].guard, GuardKind::WorkspaceBoundary);
         assert_eq!(fake.interrupt_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_quota_hint_is_recorded_without_stopping_the_turn() {
+        // Claude emits this on every turn. If it were treated as the wall, every
+        // healthy run would abort at its first event.
+        let turn = vec![
+            AgentEvent::TurnStarted,
+            AgentEvent::QuotaHint {
+                reset_at: "2026-08-03T04:00:00+00:00".into(),
+                window: Some(QuotaWindow::FiveHour),
+                provider: Some("claude".into()),
+            },
+            AgentEvent::TurnCompleted { usage: usage() },
+        ];
+        let fake = FakeAdapter::new("fake", vec![turn]);
+        let store = Store::open_in_memory().unwrap();
+        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &[], &store, "m1", "2026-08-02T00:00:00Z").await.unwrap();
+
+        assert!(out.completed, "the turn must run to completion");
+        assert!(out.resume_plan.is_none(), "a hint is not a rate limit");
+        assert_eq!(
+            store.latest_quota_reset("claude").as_deref(),
+            Some("2026-08-03T04:00:00+00:00"),
+            "and the wall's location is remembered"
+        );
     }
 
     #[tokio::test]

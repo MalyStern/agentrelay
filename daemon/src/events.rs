@@ -98,6 +98,20 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         provider: Option<String>,
     },
+    /// The provider told us where the wall is while we are still well clear of it.
+    ///
+    /// Distinct from `RateLimited` on purpose: this one must NOT trigger a resume
+    /// plan or stop a turn. It says "the five-hour window resets at T", which lets
+    /// the supervisor decide whether a unit fits before starting it instead of
+    /// discovering the answer halfway through. Conflating the two would have every
+    /// healthy turn abort itself.
+    QuotaHint {
+        reset_at: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        window: Option<QuotaWindow>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+    },
 }
 
 /// A persisted/replayed stream item: the event plus ordering metadata.

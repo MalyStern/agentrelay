@@ -26,7 +26,16 @@ pub fn spawn_stream_json(
     args: &[String],
     cwd: &str,
 ) -> Result<(EventStream, Arc<ProcessGroup>)> {
-    let mut cmd = Command::new(program);
+    // Resolve rather than trusting the OS to find it. On Windows npm installs
+    // `claude.cmd` with no `claude.exe`, and Command::new only ever looks for an
+    // .exe — so this spawn failed on every Windows machine with Claude installed,
+    // with an error that read as "not installed" rather than "cannot launch".
+    let mut cmd = crate::which::command_for(program).ok_or_else(|| {
+        AgentRelayError::new(
+            ErrorCode::ProcessSpawnFailed,
+            format!("{program} {}", crate::which::install_hint(program)),
+        )
+    })?;
     cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())

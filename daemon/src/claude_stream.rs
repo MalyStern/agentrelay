@@ -3,7 +3,7 @@
 //! Pure; fully testable with sample lines. Defensive + flagged for a live contract
 //! test (plan 02 §8.7).
 
-use crate::events::{AgentEvent, Provenance, Usage};
+use crate::events::{AgentEvent, Provenance, QuotaWindow, Usage};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -111,6 +111,50 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
                         });
                     }
                 }
+            }
+        }
+        // A live quota signal — and the plan said there wasn't one.
+        //
+        // §ז.2 was written on the assumption that Claude headless gives no running
+        // counter, so quota handling had to be purely reactive: hit the wall, then
+        // work out when to come back. A contract test against claude 2.1.220 shows
+        // otherwise. Every turn emits:
+        //
+        //   {"type":"rate_limit_event","rate_limit_info":{
+        //      "status":"allowed","resetsAt":1785648600,"rateLimitType":"five_hour",...}}
+        //
+        // `resetsAt` is a unix epoch and it arrives BEFORE the limit is reached, so
+        // the supervisor can know when the window reopens without having to hit it
+        // first — and can schedule around the wall instead of walking into it.
+        "rate_limit_event" => {
+            let info = obj.get("rate_limit_info").unwrap_or(&Value::Null);
+            let status = info.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let reset_at = info
+                .get("resetsAt")
+                .and_then(|v| v.as_i64())
+                .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_default();
+            let window = match info.get("rateLimitType").and_then(|v| v.as_str()) {
+                Some("five_hour") => Some(QuotaWindow::FiveHour),
+                Some("weekly") => Some(QuotaWindow::Weekly),
+                _ => None,
+            };
+
+            // "allowed" is the healthy case: record where the wall is, do not act.
+            // Anything else means we are at or past it.
+            if status == "allowed" {
+                out.events.push(AgentEvent::QuotaHint {
+                    reset_at,
+                    window,
+                    provider: Some("claude".into()),
+                });
+            } else {
+                out.events.push(AgentEvent::RateLimited {
+                    reset_at,
+                    window,
+                    provider: Some("claude".into()),
+                });
             }
         }
         "result" => {
@@ -259,6 +303,99 @@ mod tests {
             |e| matches!(e, AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited")));
         let r2 = parse_claude_line(&json!({"type":"result","is_error":true,"error":"boom"}));
         assert!(matches!(&r2.events[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error"));
+    }
+
+    #[test]
+    fn the_live_quota_signal_is_read_and_does_not_stop_a_healthy_turn() {
+        // Copied verbatim from a contract test against claude 2.1.220. The plan
+        // assumed no live counter existed and built the whole quota layer to be
+        // reactive; this line arrives on every turn and says where the wall is.
+        let r = parse_claude_line(&json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "allowed",
+                "resetsAt": 1785648600i64,
+                "rateLimitType": "five_hour",
+                "overageStatus": "rejected"
+            },
+            "session_id": "s1"
+        }));
+        match r.events.first() {
+            Some(AgentEvent::QuotaHint { reset_at, window, .. }) => {
+                assert!(reset_at.starts_with("2026-"), "epoch decoded: {reset_at}");
+                assert_eq!(*window, Some(QuotaWindow::FiveHour));
+            }
+            other => panic!("expected a QuotaHint, got {other:?}"),
+        }
+        // Critically NOT RateLimited: status is "allowed". Treating a healthy
+        // heartbeat as the wall would abort every turn the moment it started.
+        assert!(!r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+        assert!(!r.done);
+    }
+
+    #[test]
+    fn a_rate_limit_event_that_is_not_allowed_is_the_wall_itself() {
+        let r = parse_claude_line(&json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {"status":"blocked","resetsAt": 1785648600i64,"rateLimitType":"weekly"}
+        }));
+        match r.events.first() {
+            Some(AgentEvent::RateLimited { window, reset_at, .. }) => {
+                assert_eq!(*window, Some(QuotaWindow::Weekly));
+                assert!(!reset_at.is_empty());
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_real_result_line_maps_to_usage_we_can_actually_count() {
+        // Also from the live capture — the field names are the contract.
+        let r = parse_claude_line(&json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": "OK",
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 8807,
+                "cache_read_input_tokens": 24405,
+                "output_tokens": 37
+            }
+        }));
+        assert!(r.done);
+        match r.events.first() {
+            Some(AgentEvent::TurnCompleted { usage }) => {
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 37);
+                assert_eq!(usage.cache_read_tokens, Some(24405));
+                assert_eq!(usage.cache_creation_tokens, Some(8807));
+            }
+            other => panic!("expected TurnCompleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_thinking_block_is_not_mistaken_for_the_answer() {
+        // Real assistant messages carry `thinking` blocks alongside `text`. Only the
+        // text is the reply; emitting thinking as TextDelta would put the model's
+        // scratchpad into the timeline and the report.
+        let r = parse_claude_line(&json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "thinking", "thinking": "the user wants OK", "signature": "x"},
+                {"type": "text", "text": "OK"}
+            ]}
+        }));
+        let texts: Vec<&str> = r
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["OK"]);
     }
 
     #[test]

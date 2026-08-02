@@ -355,6 +355,40 @@ impl Store {
         Ok(())
     }
 
+    /// Record where the quota wall is, as the provider reported it.
+    ///
+    /// Worth persisting even when nothing is wrong: it is how the supervisor knows,
+    /// before starting a unit at 03:00, whether the window reopens in ten minutes or
+    /// four hours — which is the difference between waiting and wasting the night.
+    pub fn save_quota_snapshot(
+        &self,
+        provider: &str,
+        window_kind: &str,
+        reset_at_utc: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO quota_snapshots(provider, ts_utc, window_kind, reset_at_utc)
+             VALUES (?1,?2,?3,?4)",
+            params![provider, (self.clock)(), window_kind, reset_at_utc],
+        )?;
+        Ok(())
+    }
+
+    /// The most recently reported reset time for a provider, if any.
+    pub fn latest_quota_reset(&self, provider: &str) -> Option<String> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT reset_at_utc FROM quota_snapshots WHERE provider = ?1
+                 ORDER BY ts_utc DESC, id DESC LIMIT 1",
+                params![provider],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .filter(|s| !s.is_empty())
+    }
+
     /// Remember which paths were already dirty when a unit started — the user's own
     /// uncommitted work, which the supervisor must never commit on their behalf.
     pub fn save_unit_baseline(&self, mission_id: &str, unit_id: &str, paths: &[String]) -> rusqlite::Result<()> {

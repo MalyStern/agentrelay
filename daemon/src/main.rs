@@ -153,18 +153,27 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
         }
         Cmd::Doctor => {
             println!("AgentRelay doctor");
-            let mut ok = true;
+            let mut missing_required = false;
             for tool in ["git", "node", "claude"] {
-                let present = which(tool);
-                println!("  [{}] {}", if present { "OK" } else { "--" }, tool);
-                if tool != "claude" && !present {
-                    ok = false;
+                match agentrelay::which::resolve(tool) {
+                    Some(p) => println!("  [OK] {tool:<7} {}", p.display()),
+                    None => {
+                        println!("  [--] {tool:<7} {}", agentrelay::which::install_hint(tool));
+                        if tool != "claude" {
+                            missing_required = true;
+                        }
+                    }
                 }
             }
-            if ok {
-                Ok(())
-            } else {
+            if agentrelay::which::resolve("claude").is_none() {
+                println!();
+                println!("Without `claude` the daemon can supervise nothing — everything else");
+                println!("here (guards, checkpoints, the report) still works, but there is no agent.");
+            }
+            if missing_required {
                 Err("missing a required tool (git/node)".to_string())
+            } else {
+                Ok(())
             }
         }
         Cmd::Validate { cwd, unit } => {
