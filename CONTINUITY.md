@@ -349,6 +349,21 @@ Two sub-agents running in parallel on Phase-4: ui/ (web UI, demo mode) and i18n/
 (23-language catalogue + bidi/plural validator). They were told to stay out of
 daemon/ and to `git add` only their own paths.
 
+CODEX ADAPTER (2026-08-02): codex.rs, `codex exec --json` NDJSON -> AgentEvent.
+PHASE-3 PROVIDERS DONE (Claude, ACP-generic ~25 agents, Codex).
+The honest part: an Enforcement enum, stated as a VALUE not a comment. Claude
+blocks (PreToolUse hook) and ACP blocks (permission reply) - the agent waits, so a
+refusal means it did not happen. `codex exec` streams as it goes, so we can only
+REACT: the run is stopped when a forbidden action is seen, which may be a moment
+after it started. CODEX_ENFORCEMENT::Reactive.describe() says that plainly and
+points at isolation as the real mitigation. Claiming to block when you can only
+react is lying about the one thing the user is trusting you for.
+Commands are emitted as Bash ToolPre and patches as Write ToolPre, so NO guard had
+to learn about Codex - proven by running a codex `git push` through the real
+evaluate_guards. Rate limits emit RateLimited (the event the quota layer actually
+matches on - the exact bug already found once in the Claude parser). Unknown lines
+are ignored: Codex's event vocabulary is still moving. 237 cargo tests.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
