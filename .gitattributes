@@ -1,0 +1,20 @@
+# Normalise line endings so the repo behaves the same on every machine.
+# Let Git decide text vs binary by default...
+* text=auto
+
+# ...but pin the files whose line endings actually matter. A shell script committed
+# with CRLF fails on Linux/macOS with "bad interpreter: ...^M", so these are always LF
+# regardless of the committer's OS.
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.rs   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+
+# Windows-only helpers stay CRLF.
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
