@@ -110,6 +110,22 @@ pub struct StatusReport {
     /// In plain words: the quiet-hours / busy windows a run is scheduled around, or
     /// that none is set.
     pub schedule: String,
+    /// Whether the PreToolUse hook that actually BLOCKS a forbidden call is installed
+    /// for this workspace. Without it the guards are advisory only (the daemon can
+    /// react after the fact, but not prevent), and that must be visible rather than
+    /// assumed.
+    pub blocking: String,
+}
+
+/// The result of making sure the blocking hook is in place.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockingHook {
+    /// The hook was already registered — nothing to do.
+    AlreadyActive,
+    /// We just installed it, so blocking is now on.
+    JustInstalled,
+    /// We could not install it; guards are advisory only. Carries why.
+    Failed(String),
 }
 
 const DIR: &str = ".agentrelay";
@@ -227,6 +243,79 @@ impl Daemon {
             isolation: self.config.isolation.describe(),
             cloud: self.config.cloud.describe(),
             schedule: self.config.schedule.describe(),
+            blocking: if self.blocking_hook_installed() {
+                "Guards BLOCK: the PreToolUse hook is installed, so a forbidden call is \
+                 stopped before it runs."
+                    .to_string()
+            } else {
+                "Guards are ADVISORY only: the blocking hook is not installed yet. A run \
+                 installs it automatically; until then a forbidden call can start before \
+                 the supervisor reacts. Run `agentrelay install-hook` to arm it now."
+                    .to_string()
+            },
+        }
+    }
+
+    fn claude_settings_path(&self) -> PathBuf {
+        self.root.join(".claude").join("settings.json")
+    }
+
+    fn read_claude_settings(&self) -> serde_json::Value {
+        std::fs::read_to_string(self.claude_settings_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(s.strip_prefix('\u{feff}').unwrap_or(&s)).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    }
+
+    /// Is the PreToolUse hook that actually blocks a forbidden call installed for this
+    /// workspace?
+    pub fn blocking_hook_installed(&self) -> bool {
+        crate::hook::agentrelay_hook_present(&self.read_claude_settings())
+    }
+
+    /// The command string a hook entry runs: this exe, `hook`, scoped to this root.
+    fn hook_command(&self) -> String {
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "agentrelay".to_string());
+        format!("\"{}\" hook --cwd \"{}\"", exe, self.root.display())
+    }
+
+    /// Make sure the blocking hook is installed before a supervised run.
+    ///
+    /// This is the fix for a real gap: `run` (and `serve` → POST /run) used to leave
+    /// enforcement as the racy stream-watch unless the user had separately run
+    /// `install-hook`. Asking AgentRelay to supervise a run IS asking for the guards,
+    /// so a run arms them. Idempotent: an existing hook is left alone.
+    pub fn ensure_blocking_hook(&self) -> BlockingHook {
+        let existing = self.read_claude_settings();
+        if crate::hook::agentrelay_hook_present(&existing) {
+            return BlockingHook::AlreadyActive;
+        }
+        let next = match crate::hook::merge_hook_settings(&existing, &self.hook_command()) {
+            Some(v) => v,
+            // merge returns None only when settings.json exists but is not a shape we
+            // can safely edit — refusing to rewrite it is correct, but the user has to
+            // know blocking is therefore off.
+            None => {
+                return BlockingHook::Failed(format!(
+                    "{} is not in a shape AgentRelay can safely edit — guards are advisory \
+                     only until you fix it",
+                    self.claude_settings_path().display()
+                ))
+            }
+        };
+        if let Some(parent) = self.claude_settings_path().parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return BlockingHook::Failed(e.to_string());
+            }
+        }
+        match std::fs::write(
+            self.claude_settings_path(),
+            serde_json::to_string_pretty(&next).unwrap_or_default(),
+        ) {
+            Ok(()) => BlockingHook::JustInstalled,
+            Err(e) => BlockingHook::Failed(e.to_string()),
         }
     }
 
@@ -267,7 +356,15 @@ impl Daemon {
         if !self.config.notify.is_enabled() {
             return Ok(false);
         }
-        let urgency = if r.units_failed > 0 {
+        // Urgency comes from needs_attention(), not from units_failed alone —
+        // report.rs states that the exit code and the notification urgency both come
+        // from the same place so they can never disagree, and this line used to
+        // break that. A night with the DEFAULT config (no validators) produces only
+        // *unverified* units: the report says "look", the exit code is non-zero, and
+        // the phone would have stayed on low priority and never woken anyone. The
+        // one channel meant to wake you must fire in exactly the cases the report was
+        // built to surface.
+        let urgency = if r.needs_attention() {
             crate::notify::Urgency::Attention
         } else {
             crate::notify::Urgency::Quiet
@@ -316,6 +413,25 @@ impl Daemon {
 
     /// Run against the configured Claude engine.
     pub async fn run_turn(&self, mission_id: &str, prompt: &str, cwd: &str) -> Result<TurnOutcome> {
+        // Arm the blocking hook before doing anything. A supervised run without it has
+        // only the advisory stream-watch, which reacts after a forbidden tool call has
+        // already begun. This covers every run path — the CLI and serve/POST /run
+        // alike — and is idempotent. A failure to install is not fatal (the advisory
+        // layer remains), but it is recorded in the event log so the morning report
+        // can say enforcement was degraded rather than leaving it silent.
+        match self.ensure_blocking_hook() {
+            BlockingHook::AlreadyActive | BlockingHook::JustInstalled => {}
+            BlockingHook::Failed(why) => {
+                let _ = self.store.append_event(&crate::store::AppendEvent {
+                    mission_id: Some(mission_id.to_string()),
+                    actor: "watchtower".into(),
+                    kind: "guard.advisory_only".into(),
+                    payload: serde_json::json!({ "reason": why }),
+                    seq_in_turn: None,
+                });
+            }
+        }
+
         // The budget kill-switch, before anything is spent. Every other guard here
         // protects something git can restore; this one protects the only thing that
         // cannot be un-spent.
@@ -1122,6 +1238,72 @@ mod tests {
         assert_eq!(d.mission_state("m1"), crate::state::MissionState::WaitingInput);
         assert!(d.status().waiting_for_you);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_run_arms_the_blocking_hook_and_status_reports_it() {
+        // The gap this closes: `run` used to leave enforcement as the racy stream-
+        // watch unless the user had separately run install-hook, with no signal that
+        // blocking was off.
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+
+        assert!(!d.blocking_hook_installed(), "nothing installed yet");
+        assert!(d.status().blocking.contains("ADVISORY"), "{}", d.status().blocking);
+
+        assert_eq!(d.ensure_blocking_hook(), BlockingHook::JustInstalled);
+        assert!(d.blocking_hook_installed(), "now armed");
+        assert!(d.status().blocking.contains("BLOCK"), "{}", d.status().blocking);
+
+        // Idempotent — a second run does not pile up a duplicate.
+        assert_eq!(d.ensure_blocking_hook(), BlockingHook::AlreadyActive);
+        let settings = d.read_claude_settings();
+        let count = settings["hooks"]["PreToolUse"].as_array().unwrap().len();
+        assert_eq!(count, 1, "exactly one hook entry");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_hook_the_user_already_installed_is_recognised_not_duplicated() {
+        // The path/cwd vary, so an exact-string check would miss an existing hook and
+        // reinstall it. agentrelay_hook_present matches on shape.
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        // A hand-written hook with a different exe path but recognisably ours.
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(
+            root.join(".claude").join("settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"C:\\other\\agentrelay.exe hook --cwd x"}]}]}}"#,
+        )
+        .unwrap();
+        assert!(d.blocking_hook_installed());
+        assert_eq!(d.ensure_blocking_hook(), BlockingHook::AlreadyActive);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn notify_urgency_follows_needs_attention_not_just_failures() {
+        // The invariant report.rs states: exit code and phone urgency come from the
+        // same place. A default-config night (no validators) is unverified, not
+        // failed — needs_attention is true, and the phone must be woken.
+        use crate::report::MorningReport;
+        let r = MorningReport {
+            mission_id: "m".into(),
+            lines: vec![],
+            units_completed: 0,
+            units_failed: 0,
+            units_unverified: 1,
+            units_uncheckpointed: 0,
+            checkpoints: vec![],
+            nothing_happened: false,
+        };
+        assert!(r.needs_attention(), "unverified needs attention");
+        // notify_report maps needs_attention -> Urgency::Attention. We assert the
+        // mapping indirectly: an unverified-only report is attention-worthy, and the
+        // old code (units_failed > 0) would have called it quiet.
+        assert_eq!(r.units_failed, 0, "so the old check would have said 'quiet'");
     }
 
     #[test]

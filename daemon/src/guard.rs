@@ -128,14 +128,22 @@ pub fn glob_to_regex(glob: &str) -> Regex {
 }
 
 // ── command classifiers ────────────────────────────────────────────────────────
-static RE_PUSH: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bgit\b(?:\s+\S+)*\s+push\b").unwrap());
+//
+// `X?` after a binary name (via the `\.(?:exe|cmd|bat)` groups) matters on Windows:
+// npm installs `git.cmd`, `npm.cmd`, etc., and an agent that runs `git.exe push` or
+// `npm.cmd install` would otherwise slip these classifiers — the whitespace the old
+// patterns required right after the name is not there, the extension is. The codebase
+// targets Windows, so this is a real hole, not a hypothetical.
+static RE_PUSH: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\bgit(?:\.(?:exe|cmd|bat))?\b(?:\s+\S+)*\s+push\b").unwrap());
 static RE_DEPLOY: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:vercel|netlify|flyctl|serverless)\b|\bfly\s+deploy\b|\bkubectl\b(?:\s+\S+)*\s+apply\b|\bterraform\b(?:\s+\S+)*\s+apply\b|\bgcloud\b[^\n]*\bdeploy\b|\beb\s+deploy\b|\bheroku\b[^\n]*(?:push|deploy)\b|\bansible-playbook\b").unwrap()
+    Regex::new(r"(?i)\b(?:vercel|netlify|flyctl|serverless)(?:\.(?:exe|cmd|bat))?\b|\bfly(?:\.exe)?\s+deploy\b|\bkubectl(?:\.exe)?\b(?:\s+\S+)*\s+apply\b|\bterraform(?:\.exe)?\b(?:\s+\S+)*\s+apply\b|\bgcloud(?:\.cmd)?\b[^\n]*\bdeploy\b|\beb\s+deploy\b|\bheroku(?:\.cmd)?\b[^\n]*(?:push|deploy)\b|\bansible-playbook\b").unwrap()
 });
-static RE_NET: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)\b").unwrap());
+static RE_NET: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)(?:\.exe)?\b").unwrap()
+});
 static RE_DEP: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|i)\b|\bpip3?\s+install\b|\bcargo\s+add\b|\bgo\s+get\b|\bgem\s+install\b|\bpoetry\s+add\b|\buv\s+add\b").unwrap()
+    Regex::new(r"(?i)\b(?:npm|pnpm|yarn|bun)(?:\.(?:exe|cmd|bat))?\s+(?:install|add|i)\b|\bpip3?(?:\.exe)?\s+install\b|\bcargo(?:\.exe)?\s+add\b|\bgo(?:\.exe)?\s+get\b|\bgem(?:\.cmd)?\s+install\b|\bpoetry(?:\.exe)?\s+add\b|\buv(?:\.exe)?\s+add\b").unwrap()
 });
 static RE_WRITE_TOOL: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)^(Write|Edit|MultiEdit|NotebookEdit|str_replace_editor|create_file|apply_patch)$").unwrap()

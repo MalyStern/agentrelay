@@ -541,7 +541,10 @@ pub fn execute(req: &CloudRequest) -> Result<serde_json::Value> {
             ErrorCode::ProviderProtocolMismatch,
             format!(
                 "the cloud response was not JSON: {e} (first bytes: {})",
-                &text[..text.len().min(200)]
+                // char-safe: slicing &text[..200] by byte index panics when byte 200
+                // lands mid-character, and a provider's HTML error page (multibyte,
+                // >200 bytes) is exactly the input that reaches this arm.
+                text.chars().take(200).collect::<String>()
             ),
         )
     })
@@ -765,5 +768,17 @@ mod tests {
             CloudProvider::Devin => Ok(devin_submit_request(cfg.base(), token, prompt)),
             CloudProvider::None => Err(AgentRelayError::new(ErrorCode::Internal, "off".to_string())),
         }
+    }
+
+    #[test]
+    fn a_multibyte_error_body_would_not_panic_the_slice() {
+        // The bug: `&text[..200]` panics when byte 200 lands mid-character, and a
+        // provider's HTML error page (multibyte, >200 bytes) is exactly what reaches
+        // that arm. char-based truncation is safe for any input. Prove the technique
+        // on a hostile string of 3-byte chars, where byte 200 is always mid-char.
+        let hostile: String = "\u{2764}".repeat(300);
+        let cut: String = hostile.chars().take(200).collect();
+        assert_eq!(cut.chars().count(), 200);
+        assert!(cut.len() > 200, "bytes exceed chars, and taking chars did not panic");
     }
 }

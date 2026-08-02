@@ -172,6 +172,39 @@ pub fn merge_hook_settings(existing: &Value, command: &str) -> Option<Value> {
     Some(Value::Object(root))
 }
 
+/// Is an AgentRelay PreToolUse hook already registered?
+///
+/// Matches on the recognisable shape of our command (it contains "agentrelay" and
+/// "hook") rather than an exact string, because the binary path and the `--cwd` vary
+/// per machine and per workspace — an exact-match check would report "not installed"
+/// for a hook that is in fact ours, and a supervised run would then reinstall a
+/// duplicate or, worse, believe blocking is off when it is on.
+pub fn agentrelay_hook_present(existing: &Value) -> bool {
+    existing
+        .get("hooks")
+        .and_then(|h| h.get("PreToolUse"))
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter().any(|m| {
+                m.get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hs| {
+                        hs.iter().any(|h| {
+                            h.get("command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| {
+                                    let l = c.to_ascii_lowercase();
+                                    l.contains("agentrelay") && l.contains("hook")
+                                })
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Remove our hook and leave the user's others untouched.
 pub fn remove_hook_settings(existing: &Value, command: &str) -> Value {
     let mut root = existing.as_object().cloned().unwrap_or_default();

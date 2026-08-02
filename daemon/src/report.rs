@@ -236,6 +236,16 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
     for e in store.get_events(mission_id).unwrap_or_default() {
         // The agent's own confirmation that a call did not execute. Stronger than
         // our record of refusing it, so it is labelled VERIFIED.
+        if e.kind == "guard.advisory_only" {
+            let why = e.payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            lines.push(Line {
+                provenance: Provenance::Recorded,
+                text: format!(
+                    "enforcement was DEGRADED this run: the blocking hook could not be                      installed, so guards were advisory only ({why})"
+                ),
+            });
+            continue;
+        }
         if e.kind == "tool.denied" {
             let tool = e.payload.get("tool").and_then(|v| v.as_str()).unwrap_or("a tool");
             lines.push(Line {

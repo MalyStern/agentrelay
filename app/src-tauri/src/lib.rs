@@ -63,21 +63,35 @@ fn read_connection(workspace: &Path) -> Option<Connection> {
     })
 }
 
-/// Locate the `agentrelay` binary. Prefers the one built alongside this repo so a
-/// developer run works with no install, then falls back to PATH for an installed one.
+/// Locate the `agentrelay` binary.
+///
+/// The search ORDER matters for safety. In a release build we trust PATH first: the
+/// walk-up looks for a sibling `daemon/target/...` binary, and preferring that over
+/// PATH means an attacker who can drop a file into a parent of the install directory
+/// could get their binary launched. That is a real, if narrow, escalation, so a
+/// shipped app treats PATH — an installed, chosen binary — as authoritative and only
+/// falls back to the sibling for a source checkout that has no install. A debug build
+/// keeps the developer-friendly order (sibling first) because there PATH usually has
+/// nothing and the whole point is to run against the just-built daemon.
 fn find_agentrelay() -> Option<PathBuf> {
-    // Alongside a source checkout: ../../daemon/target/{debug,release}/agentrelay(.exe)
+    #[cfg(debug_assertions)]
+    {
+        sibling_daemon().or_else(|| which_on_path(&bin_name()))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        which_on_path(&bin_name()).or_else(sibling_daemon)
+    }
+}
+
+/// A daemon binary built alongside a source checkout: walk up a few levels looking for
+/// `daemon/target/{release,debug}/agentrelay`. Release preferred over debug.
+fn sibling_daemon() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let mut here = exe.parent()?.to_path_buf();
-    // Walk up a few levels looking for a sibling daemon build — the exact depth
-    // differs between `cargo run`, a bundle, and an installed layout.
     for _ in 0..6 {
-        for profile in ["debug", "release"] {
-            let cand = here
-                .join("daemon")
-                .join("target")
-                .join(profile)
-                .join(bin_name());
+        for profile in ["release", "debug"] {
+            let cand = here.join("daemon").join("target").join(profile).join(bin_name());
             if cand.is_file() {
                 return Some(cand);
             }
@@ -87,8 +101,7 @@ fn find_agentrelay() -> Option<PathBuf> {
             None => break,
         }
     }
-    // Installed: on PATH.
-    which_on_path(&bin_name())
+    None
 }
 
 fn bin_name() -> String {
