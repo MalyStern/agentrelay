@@ -139,7 +139,15 @@ pub const SETTINGS_REL_PATH: &str = ".claude/settings.json";
 /// Returns None when our hook is already present, so installing twice is a no-op
 /// rather than a growing pile of duplicate entries.
 pub fn merge_hook_settings(existing: &Value, command: &str) -> Option<Value> {
-    let mut root = existing.as_object().cloned().unwrap_or_default();
+    // Refuse a non-object root outright. `as_object().unwrap_or_default()` would turn
+    // a top-level array or string — someone's real (if unusual) settings — into an
+    // empty object and silently discard it. `null` is the one exception: it is how a
+    // caller says "there is nothing here yet, create it".
+    let mut root = match existing {
+        Value::Object(o) => o.clone(),
+        Value::Null => serde_json::Map::new(),
+        _ => return None,
+    };
 
     let hooks = root.entry("hooks").or_insert_with(|| serde_json::json!({}));
     let hooks_obj = match hooks.as_object_mut() {

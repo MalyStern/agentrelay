@@ -128,6 +128,19 @@ pub enum BlockingHook {
     Failed(String),
 }
 
+/// What reading `.claude/settings.json` found. Kept distinct so a file we cannot
+/// parse is never silently treated as empty and overwritten.
+#[derive(Debug, Clone, PartialEq)]
+enum ClaudeSettings {
+    /// No file (or an empty one) — safe to create.
+    Missing,
+    /// A file that exists but we could not read or parse as a JSON object. Never to
+    /// be rewritten.
+    Invalid(String),
+    /// A JSON object we understand.
+    Parsed(serde_json::Value),
+}
+
 const DIR: &str = ".agentrelay";
 
 pub struct Daemon {
@@ -243,15 +256,21 @@ impl Daemon {
             isolation: self.config.isolation.describe(),
             cloud: self.config.cloud.describe(),
             schedule: self.config.schedule.describe(),
-            blocking: if self.blocking_hook_installed() {
-                "Guards BLOCK: the PreToolUse hook is installed, so a forbidden call is \
-                 stopped before it runs."
-                    .to_string()
-            } else {
-                "Guards are ADVISORY only: the blocking hook is not installed yet. A run \
-                 installs it automatically; until then a forbidden call can start before \
-                 the supervisor reacts. Run `agentrelay install-hook` to arm it now."
-                    .to_string()
+            blocking: match self.read_claude_settings_checked() {
+                ClaudeSettings::Parsed(v) if crate::hook::agentrelay_hook_present(&v) => {
+                    "Guards BLOCK: the PreToolUse hook is installed, so a forbidden call is \
+                     stopped before it runs."
+                        .to_string()
+                }
+                ClaudeSettings::Invalid(why) => format!(
+                    "Guards state UNKNOWN: .claude/settings.json {why}, so AgentRelay cannot \
+                     tell whether the blocking hook is installed and will not overwrite it. \
+                     Fix that file to arm the guards."
+                ),
+                _ => "Guards are ADVISORY only: the blocking hook is not installed yet. A run \
+                      installs it automatically; until then a forbidden call can start before \
+                      the supervisor reacts. Run `agentrelay install-hook` to arm it now."
+                    .to_string(),
             },
         }
     }
@@ -260,17 +279,40 @@ impl Daemon {
         self.root.join(".claude").join("settings.json")
     }
 
-    fn read_claude_settings(&self) -> serde_json::Value {
-        std::fs::read_to_string(self.claude_settings_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(s.strip_prefix('\u{feff}').unwrap_or(&s)).ok())
-            .unwrap_or_else(|| serde_json::json!({}))
+    /// The outcome of reading `.claude/settings.json`. Collapsing "missing" and
+    /// "present but unreadable" into an empty object — which the old code did — is how
+    /// a malformed settings.json got silently overwritten: `ensure_blocking_hook` saw
+    /// `{}`, decided the hook was absent, merged onto the empty object, and wrote,
+    /// destroying the file it could not parse. The whole point of this type is to keep
+    /// those three cases apart.
+    fn read_claude_settings_checked(&self) -> ClaudeSettings {
+        let path = self.claude_settings_path();
+        if !path.exists() {
+            return ClaudeSettings::Missing;
+        }
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => return ClaudeSettings::Invalid(format!("cannot read it: {e}")),
+        };
+        let trimmed = raw.strip_prefix('\u{feff}').unwrap_or(&raw).trim();
+        if trimmed.is_empty() {
+            // An empty file holds nothing to preserve, so it is safe to treat as
+            // missing and create the settings.
+            return ClaudeSettings::Missing;
+        }
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(v) if v.is_object() => ClaudeSettings::Parsed(v),
+            Ok(_) => ClaudeSettings::Invalid("its top level is not a JSON object".into()),
+            Err(e) => ClaudeSettings::Invalid(format!("it is not valid JSON: {e}")),
+        }
     }
 
     /// Is the PreToolUse hook that actually blocks a forbidden call installed for this
-    /// workspace?
+    /// workspace? Only a settings file we could actually READ can answer this — an
+    /// unreadable one is `false` here, and `blocking_state` says why so `status` does
+    /// not report a confident "advisory" when the truth is "we cannot tell".
     pub fn blocking_hook_installed(&self) -> bool {
-        crate::hook::agentrelay_hook_present(&self.read_claude_settings())
+        matches!(self.read_claude_settings_checked(), ClaudeSettings::Parsed(v) if crate::hook::agentrelay_hook_present(&v))
     }
 
     /// The command string a hook entry runs: this exe, `hook`, scoped to this root.
@@ -288,19 +330,36 @@ impl Daemon {
     /// `install-hook`. Asking AgentRelay to supervise a run IS asking for the guards,
     /// so a run arms them. Idempotent: an existing hook is left alone.
     pub fn ensure_blocking_hook(&self) -> BlockingHook {
-        let existing = self.read_claude_settings();
-        if crate::hook::agentrelay_hook_present(&existing) {
-            return BlockingHook::AlreadyActive;
-        }
+        let existing = match self.read_claude_settings_checked() {
+            ClaudeSettings::Parsed(v) => {
+                if crate::hook::agentrelay_hook_present(&v) {
+                    return BlockingHook::AlreadyActive;
+                }
+                v
+            }
+            // Nothing there yet — safe to create.
+            ClaudeSettings::Missing => serde_json::json!({}),
+            // Present but we cannot understand it. REFUSE to write — overwriting the
+            // user's settings.json because we could not parse it is the exact
+            // fail-quiet-and-destroy behaviour this project exists to prevent. Guards
+            // stay advisory, loudly.
+            ClaudeSettings::Invalid(why) => {
+                return BlockingHook::Failed(format!(
+                    "{} exists but {why} — refusing to rewrite it and lose your settings. \
+                     Fix it (or delete it) and the guards will arm; until then they are \
+                     advisory only.",
+                    self.claude_settings_path().display()
+                ))
+            }
+        };
         let next = match crate::hook::merge_hook_settings(&existing, &self.hook_command()) {
             Some(v) => v,
-            // merge returns None only when settings.json exists but is not a shape we
-            // can safely edit — refusing to rewrite it is correct, but the user has to
-            // know blocking is therefore off.
+            // A shape we still cannot safely edit (e.g. `hooks` is not an object).
+            // Same rule: do not rewrite what we cannot read.
             None => {
                 return BlockingHook::Failed(format!(
-                    "{} is not in a shape AgentRelay can safely edit — guards are advisory \
-                     only until you fix it",
+                    "{} has a `hooks` section AgentRelay can't safely edit — guards are \
+                     advisory only until you fix it",
                     self.claude_settings_path().display()
                 ))
             }
@@ -1258,9 +1317,52 @@ mod tests {
 
         // Idempotent — a second run does not pile up a duplicate.
         assert_eq!(d.ensure_blocking_hook(), BlockingHook::AlreadyActive);
-        let settings = d.read_claude_settings();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".claude").join("settings.json")).unwrap(),
+        )
+        .unwrap();
         let count = settings["hooks"]["PreToolUse"].as_array().unwrap().len();
         assert_eq!(count, 1, "exactly one hook entry");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_malformed_settings_file_is_refused_never_overwritten() {
+        // The bug: read collapsed an unparseable settings.json to {}, then
+        // ensure_blocking_hook wrote onto the empty object and destroyed the file.
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        let settings = root.join(".claude").join("settings.json");
+        let broken = "{ \"hooks\": { not json ";
+        std::fs::write(&settings, broken).unwrap();
+
+        match d.ensure_blocking_hook() {
+            crate::daemon::BlockingHook::Failed(why) => {
+                assert!(why.contains("refusing to rewrite"), "{why}");
+            }
+            other => panic!("must refuse a broken settings file, got {other:?}"),
+        }
+        // The file is untouched — not overwritten with our hook.
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), broken);
+        assert!(!d.blocking_hook_installed(), "cannot claim installed on an unreadable file");
+        assert!(d.status().blocking.contains("UNKNOWN"), "{}", d.status().blocking);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_settings_file_whose_root_is_not_an_object_is_also_refused() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        let settings = root.join(".claude").join("settings.json");
+        std::fs::write(&settings, "[1, 2, 3]").unwrap(); // valid JSON, wrong shape
+        assert!(matches!(d.ensure_blocking_hook(), crate::daemon::BlockingHook::Failed(_)));
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "[1, 2, 3]");
+        // merge itself refuses a non-object root rather than discarding it.
+        assert!(crate::hook::merge_hook_settings(&serde_json::json!([1, 2]), "x").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

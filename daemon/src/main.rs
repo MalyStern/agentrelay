@@ -314,13 +314,29 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
         }
         Cmd::InstallHook { uninstall } => {
             let settings_path = root.join(".claude").join("settings.json");
-            let existing: serde_json::Value = std::fs::read_to_string(&settings_path)
-                .ok()
-                .and_then(|s| {
-                    let s = s.strip_prefix('\u{feff}').unwrap_or(&s).to_string();
-                    serde_json::from_str(&s).ok()
-                })
-                .unwrap_or_else(|| serde_json::json!({}));
+            // Distinguish "missing" from "present but unreadable". Collapsing both to
+            // {} would silently overwrite a settings.json we could not parse — the same
+            // bug the daemon's ensure_blocking_hook was fixed for.
+            let existing: serde_json::Value = match std::fs::read_to_string(&settings_path) {
+                Err(_) => serde_json::json!({}),
+                Ok(s) => {
+                    let s = s.strip_prefix('\u{feff}').unwrap_or(&s).trim().to_string();
+                    if s.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        match serde_json::from_str::<serde_json::Value>(&s) {
+                            Ok(v) if v.is_object() => v,
+                            _ => {
+                                return Err(format!(
+                                    "{} exists but is not a valid JSON object — refusing to \
+                                     rewrite it and lose your settings. Fix or delete it first.",
+                                    settings_path.display()
+                                ))
+                            }
+                        }
+                    }
+                }
+            };
 
             // An absolute path: the agent's cwd is not necessarily ours.
             let exe = std::env::current_exe()
