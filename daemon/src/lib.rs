@@ -19,6 +19,7 @@ pub mod events;
 pub mod guard;
 pub mod hook;
 pub mod ipc;
+pub mod isolation;
 pub mod keepawake;
 pub mod mission;
 pub mod process;

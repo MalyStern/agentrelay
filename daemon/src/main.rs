@@ -141,6 +141,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 println!("               ^ nothing will happen until you act.");
             }
             println!();
+            println!("{}", s.isolation);
+            println!();
             println!("{}", s.notifications);
             println!();
             println!("{} Spent so far: ${:.2}.", s.budget, s.spent_usd);

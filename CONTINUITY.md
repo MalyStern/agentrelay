@@ -270,6 +270,23 @@ changes the agent has never seen. Surfaced in `status`. 178 cargo tests.
 NEXT (Phase-2): Isolation-Ring (container + egress allowlist) - needs Docker,
 check availability first; VCS/CI loop.
 
+ISOLATION RING (2026-08-02): isolation.rs. Docker IS available here (29.5.3,
+linux containers), so this is verified live, not just in flag assertions. The
+container is the layer that does not depend on RECOGNISING anything - guards
+pattern-match tool calls, and pattern-matching loses to a general-purpose shell.
+Defaults: --network none, only the workspace mounted (no home, no ~/.ssh, no
+docker.sock), --read-only root with a writable /tmp, --cap-drop ALL,
+no-new-privileges. Off unless the user names an image (pulling one we chose would
+be a supply-chain decision made for them). If isolation is configured and Docker
+is unavailable, run_turn REFUSES rather than silently running unisolated. An
+allow_network list honestly says docker alone cannot enforce a host allowlist.
+A real integration test runs alpine:3 and asserts: workspace readable, workspace
+WRITABLE despite read-only root, network unreachable, root unwritable. It skips
+when Docker is absent. 187 cargo tests.
+
+NEXT (Phase-2): VCS/CI loop (red CI -> auto-fix), Drift detection (Watchtower
+layer-3).
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

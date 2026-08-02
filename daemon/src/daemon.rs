@@ -43,6 +43,9 @@ pub struct Config {
     /// a budget you believe is set but isn't is worse than none.
     #[serde(default)]
     pub budget: crate::cost::Budget,
+    /// Run the agent inside a container. Off unless an image is named.
+    #[serde(default)]
+    pub isolation: crate::isolation::Isolation,
 }
 
 impl Default for Config {
@@ -58,6 +61,7 @@ impl Default for Config {
             validators: vec![],
             notify: crate::notify::NotifyConfig::None,
             budget: crate::cost::Budget::default(),
+            isolation: crate::isolation::Isolation::default(),
         }
     }
 }
@@ -78,6 +82,8 @@ pub struct StatusReport {
     pub state: String,
     pub state_meaning: String,
     pub waiting_for_you: bool,
+    /// In plain words: whether the agent is contained, and what it can reach.
+    pub isolation: String,
 }
 
 const DIR: &str = ".agentrelay";
@@ -185,6 +191,7 @@ impl Daemon {
             state: st.as_str().to_string(),
             state_meaning: st.describe().to_string(),
             waiting_for_you: st.needs_a_person(),
+            isolation: self.config.isolation.describe(),
         }
     }
 
@@ -262,6 +269,11 @@ impl Daemon {
         // The budget kill-switch, before anything is spent. Every other guard here
         // protects something git can restore; this one protects the only thing that
         // cannot be un-spent.
+        // If the user asked for isolation and we cannot provide it, stop. Running
+        // unisolated would deliver the opposite of what was configured, silently.
+        if let Some(why) = crate::isolation::blocker(&self.config.isolation) {
+            return Err(AgentRelayError::new(ErrorCode::Internal, why));
+        }
         if let crate::cost::BudgetVerdict::Stop { reason, .. } = self.check_budget(mission_id) {
             return Err(AgentRelayError::new(
                 ErrorCode::Internal,
