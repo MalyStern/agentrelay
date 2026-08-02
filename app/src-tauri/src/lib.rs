@@ -188,6 +188,20 @@ fn connection_status(app: tauri::AppHandle) -> ConnStatus {
                 .to_string(),
         };
     };
+    // Distinguish "not a workspace" from "workspace, daemon not running" — otherwise
+    // picking the wrong folder looks the same as a stopped daemon, and Start just
+    // fails later with no idea why.
+    if !ws.join(".agentrelay").exists() {
+        return ConnStatus {
+            connected: false,
+            addr: None,
+            workspace: Some(ws.to_string_lossy().into_owned()),
+            detail: "This folder is not an AgentRelay workspace (no .agentrelay). Run \
+                     `agentrelay init` in it, or run scripts\\make-sandbox.ps1 for a ready-made \
+                     one, then choose that folder."
+                .to_string(),
+        };
+    }
     match read_connection(&ws) {
         Some(c) => ConnStatus {
             connected: true,
@@ -199,7 +213,8 @@ fn connection_status(app: tauri::AppHandle) -> ConnStatus {
             connected: false,
             addr: None,
             workspace: Some(ws.to_string_lossy().into_owned()),
-            detail: "The daemon is not running for this workspace. Start it to see live data."
+            detail: "This IS an AgentRelay workspace, but the daemon is not running. Click \
+                     Start daemon to see live data."
                 .to_string(),
         },
     }
@@ -218,31 +233,79 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
         .clone()
         .ok_or("choose a workspace first")?;
 
+    // The most common reason serve fails: the folder was never initialised. Say so
+    // immediately and specifically, instead of spawning a daemon that will exit and
+    // then waiting ten seconds for a file that is never coming.
+    if !ws.join(".agentrelay").exists() {
+        return Err(format!(
+            "{} is not an AgentRelay workspace — there is no .agentrelay folder here. \
+             Run `agentrelay init` in it first, or use scripts\\make-sandbox.ps1 to create \
+             a ready-made one, then choose that folder.",
+            ws.display()
+        ));
+    }
+
     if read_connection(&ws).is_some() {
         return Ok("already running".to_string());
     }
 
     let bin = find_agentrelay().ok_or(
         "could not find the `agentrelay` program. Build the daemon (cargo build in daemon/) \
-         or install it, then try again.",
+         or install it (cargo install --path daemon), then try again.",
     )?;
 
-    let child = std::process::Command::new(&bin)
+    // Capture the daemon's output to a file so a failure is diagnosable. A file never
+    // blocks the child the way an unread pipe can — serve keeps running on success and
+    // we only read the log if it does NOT.
+    let log = std::env::temp_dir().join("agentrelay-serve.log");
+    let out = std::fs::File::create(&log)
+        .map_err(|e| format!("could not create a log file for the daemon: {e}"))?;
+    let err = out
+        .try_clone()
+        .map_err(|e| format!("could not set up the daemon's output: {e}"))?;
+
+    let mut child = std::process::Command::new(&bin)
         .arg("serve")
         .current_dir(&ws)
+        .stdout(std::process::Stdio::from(out))
+        .stderr(std::process::Stdio::from(err))
         .spawn()
         .map_err(|e| format!("could not start the daemon: {e}"))?;
-    *state.child.lock().unwrap() = Some(child);
 
-    // Wait for ipc.json to appear — the daemon writes it once it is listening.
+    // Wait for ipc.json to appear — OR for the daemon to exit early, which means it
+    // failed and no amount of waiting will help. Reporting its own words turns "did
+    // not begin listening" from a mystery into a diagnosis (a taken port, a bad
+    // config, a panic).
     let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
+    loop {
         if read_connection(&ws).is_some() {
+            *state.child.lock().unwrap() = Some(child);
             return Ok("started".to_string());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            let said = std::fs::read_to_string(&log).unwrap_or_default();
+            return Err(format!(
+                "the daemon exited ({status}) without listening. It said:\n{}",
+                said.trim()
+            ));
+        }
+        if Instant::now() >= deadline {
+            break;
         }
         std::thread::sleep(Duration::from_millis(120));
     }
-    Err("the daemon started but did not begin listening within 10 seconds".to_string())
+
+    let _ = child.kill();
+    let said = std::fs::read_to_string(&log).unwrap_or_default();
+    let said = said.trim();
+    if said.is_empty() {
+        Err("the daemon did not begin listening within 10 seconds (and printed nothing)."
+            .to_string())
+    } else {
+        Err(format!(
+            "the daemon did not begin listening within 10 seconds. It said:\n{said}"
+        ))
+    }
 }
 
 /// The workspace's status, fetched with the token attached here.
