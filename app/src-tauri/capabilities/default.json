@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the AgentRelay window is allowed to do. Kept minimal on purpose: the native folder dialog, and the app's own commands. No filesystem, shell, or http permission is granted to the webview — every privileged thing goes through a named Rust command that we control.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "dialog:allow-open"
+  ]
+}

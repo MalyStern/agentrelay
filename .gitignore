@@ -10,3 +10,6 @@ target/
 *.sqlite
 *.sqlite-*
 .agentrelay/
+
+# Tauri generated
+app/src-tauri/gen/

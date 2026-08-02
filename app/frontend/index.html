@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentRelay</title>
+    <style>
+      /* Local-first to the letter: no web font, no CDN, system stack only. The
+         window must look right with nothing loaded from the network, because the
+         network is exactly what this product promises not to touch. */
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --ink: #14171c;
+        --muted: #5b6472;
+        --line: #dfe3e8;
+        --accent: #2f6feb;
+        --ok-bg: #e7f6ec;
+        --ok-ink: #12692e;
+        --alert-bg: #fdecec;
+        --alert-ink: #a01414;
+        --verified: #12692e;
+        --recorded: #334;
+        --estimated: #7a5b00;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14171c;
+          --panel: #1c2027;
+          --ink: #e9edf2;
+          --muted: #9aa4b2;
+          --line: #2c313a;
+          --accent: #5b8dff;
+          --ok-bg: #10281a;
+          --ok-ink: #7fe0a0;
+          --alert-bg: #2c1616;
+          --alert-ink: #ff9a9a;
+          --verified: #7fe0a0;
+          --recorded: #b9c2d0;
+          --estimated: #e6c766;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+      header {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+      }
+      header .title { font-weight: 700; margin-right: auto; }
+      button {
+        font: inherit;
+        padding: 7px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+      button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+      main { padding: 16px; max-width: 900px; margin: 0 auto; }
+      /* The banner that answers "do I need to do something?" before anything else. */
+      .banner {
+        border-radius: 12px;
+        padding: 16px 18px;
+        margin-bottom: 16px;
+        border: 2px solid transparent;
+      }
+      .banner.calm { background: var(--ok-bg); color: var(--ok-ink); border-color: var(--ok-ink); }
+      .banner.attention { background: var(--alert-bg); color: var(--alert-ink); border-color: var(--alert-ink); }
+      .banner h1 { margin: 0 0 4px; font-size: 20px; }
+      .banner p { margin: 0; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+      }
+      .panel h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+      .muted { color: var(--muted); }
+      .row { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
+      .line { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+      .line:first-child { border-top: 0; }
+      /* Provenance NEVER by colour alone — a glyph, a border shape, the word, and an
+         aria-label all carry it, so it survives greyscale, colour-blindness and a
+         screen reader. This mirrors the daemon's own rule. */
+      .tag {
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 1px 7px;
+        border-radius: 4px;
+        white-space: nowrap;
+        align-self: flex-start;
+      }
+      .tag.verified { color: var(--verified); border: 2px double var(--verified); }
+      .tag.recorded { color: var(--recorded); border: 1px solid var(--recorded); }
+      .tag.estimated { color: var(--estimated); border: 1px dashed var(--estimated); }
+      code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; background: rgba(127,127,127,.14); padding: 1px 5px; border-radius: 4px; }
+      .err { color: var(--alert-ink); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="title">AgentRelay</span>
+      <button id="choose">Choose workspace…</button>
+      <button id="start">Start daemon</button>
+      <button id="refresh" class="primary">Refresh</button>
+    </header>
+    <main>
+      <div id="banner" class="banner calm" role="status" aria-live="polite">
+        <h1>Welcome</h1>
+        <p>Choose a workspace — a folder where you ran <code>agentrelay init</code> — to see how last night went.</p>
+      </div>
+
+      <div class="panel" id="conn-panel">
+        <h2>Connection</h2>
+        <div id="conn" class="muted">Not connected.</div>
+      </div>
+
+      <div class="panel" id="report-panel" hidden>
+        <h2>Overnight report</h2>
+        <div id="report"></div>
+        <p class="muted" style="margin-top:10px;font-size:13px">
+          Every line is labelled by where it came from.
+          <span class="tag verified" aria-label="verified">✓✓ VERIFIED</span> a command ran and its exit code decided it ·
+          <span class="tag recorded" aria-label="recorded">▣ RECORDED</span> the supervisor observed it ·
+          <span class="tag estimated" aria-label="estimated">≈ ESTIMATED</span> a rule of thumb, not a measurement.
+        </p>
+      </div>
+
+      <div class="panel" id="status-panel" hidden>
+        <h2>Status</h2>
+        <div id="status"></div>
+      </div>
+    </main>
+
+    <script>
+      // window.__TAURI__ is exposed because tauri.conf sets withGlobalTauri. No
+      // bundler, no import map — the app has to run from a file the way the rest of
+      // this product does.
+      const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+      const $ = (id) => document.getElementById(id);
+
+      function esc(s) {
+        return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      }
+
+      // The banner's job is the first thing a half-awake person reads at 8am, so its
+      // verdict comes straight from the daemon's own needs_attention — the frontend
+      // does not re-decide it, because a screen that computed a different answer from
+      // the same data would be worse than no screen.
+      function setBanner(report) {
+        const b = $("banner");
+        if (report && report.needs_attention) {
+          b.className = "banner attention";
+          b.setAttribute("role", "alert");
+          b.innerHTML = `<h1>Yes — you're needed</h1><p>${esc(report.headline || "Something needs your attention.")}</p>`;
+        } else if (report) {
+          b.className = "banner calm";
+          b.setAttribute("role", "status");
+          b.innerHTML = `<h1>No action needed</h1><p>${esc(report.headline || "The run is fine.")}</p>`;
+        }
+      }
+
+      function tagClass(p) {
+        return p === "verified" ? "verified" : p === "estimated" ? "estimated" : "recorded";
+      }
+      function tagText(p) {
+        return p === "verified" ? "✓✓ VERIFIED" : p === "estimated" ? "≈ ESTIMATED" : "▣ RECORDED";
+      }
+
+      function renderReport(report) {
+        setBanner(report);
+        $("report-panel").hidden = false;
+        const lines = report.lines || [];
+        if (report.nothing_happened || lines.length === 0) {
+          $("report").innerHTML = `<p class="muted">Nothing ran overnight. If you expected work, something stopped before it started.</p>`;
+          return;
+        }
+        $("report").innerHTML = lines
+          .map((l) => {
+            const p = (l.provenance || "recorded").toLowerCase();
+            return `<div class="line"><span class="tag ${tagClass(p)}" aria-label="${p}">${tagText(p)}</span><span>${esc(l.text || "")}</span></div>`;
+          })
+          .join("");
+      }
+
+      function renderStatus(s) {
+        $("status-panel").hidden = false;
+        const rows = [
+          ["State", `${esc(s.state || "?")} — ${esc(s.state_meaning || "")}`],
+          ["Engine", esc(s.program || "?")],
+          ["Spending", esc(s.budget || "") + (typeof s.spent_usd === "number" ? ` (spent $${s.spent_usd.toFixed(2)})` : "")],
+          ["Isolation", esc(s.isolation || "")],
+          ["Notifications", esc(s.notifications || "")],
+        ];
+        let html = rows.map(([k, v]) => `<div class="row"><strong style="flex:0 0 120px">${k}</strong><span>${v}</span></div>`).join("");
+        if (s.waiting_for_you) {
+          html = `<p class="err"><strong>This run will not continue by itself.</strong></p>` + html;
+        }
+        $("status").innerHTML = html;
+      }
+
+      async function refresh() {
+        try {
+          const conn = await invoke("connection_status");
+          $("conn").textContent = conn.detail + (conn.workspace ? ` (${conn.workspace})` : "");
+          if (!conn.connected) {
+            $("report-panel").hidden = true;
+            $("status-panel").hidden = true;
+            return;
+          }
+          const [status, report] = await Promise.all([
+            invoke("get_status").catch((e) => ({ __err: String(e) })),
+            invoke("get_report").catch((e) => ({ __err: String(e) })),
+          ]);
+          if (report && !report.__err) renderReport(report);
+          if (status && !status.__err) renderStatus(status);
+          if (report && report.__err) $("report").innerHTML = `<p class="err">${esc(report.__err)}</p>`;
+        } catch (e) {
+          $("conn").innerHTML = `<span class="err">${esc(String(e))}</span>`;
+        }
+      }
+
+      $("choose").addEventListener("click", async () => {
+        try {
+          const picked = await invoke("choose_workspace");
+          if (picked) refresh();
+        } catch (e) {
+          $("conn").innerHTML = `<span class="err">${esc(String(e))}</span>`;
+        }
+      });
+      $("start").addEventListener("click", async () => {
+        $("conn").textContent = "Starting the daemon…";
+        try {
+          await invoke("start_daemon");
+          refresh();
+        } catch (e) {
+          $("conn").innerHTML = `<span class="err">${esc(String(e))}</span>`;
+        }
+      });
+      $("refresh").addEventListener("click", refresh);
+
+      refresh();
+    </script>
+  </body>
+</html>
