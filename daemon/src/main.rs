@@ -51,6 +51,13 @@ enum Cmd {
         #[arg(long)]
         uninstall: bool,
     },
+    /// Is there room in the quota window to start a unit of this length?
+    /// Exits 0 to go ahead, 75 to wait — so a night script can gate on it.
+    Fits {
+        /// Roughly how long the unit takes, in minutes.
+        #[arg(long, default_value_t = 30)]
+        minutes: i64,
+    },
     /// Note what is already uncommitted, BEFORE the agent starts a unit.
     Begin {
         #[arg(long, default_value = ".")]
@@ -265,6 +272,32 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 println!("stopping the agent after the fact. Your other hooks were left alone.");
             }
             Ok(())
+        }
+        Cmd::Fits { minutes } => {
+            use agentrelay::quota::StartDecision;
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            let now = chrono::Utc::now().to_rfc3339();
+            match d.should_start_unit(minutes * 60_000, &now) {
+                StartDecision::Start => {
+                    println!("Go — a ~{minutes} minute unit fits in what is left of the window.");
+                    Ok(())
+                }
+                StartDecision::StartUnknownWindow => {
+                    println!("Go, but blind: no quota window has been reported yet, so there is");
+                    println!("nothing to reason about. Run a turn and the provider will tell us.");
+                    Ok(())
+                }
+                StartDecision::WaitUntilReset { resume_at_utc, wait_ms } => {
+                    println!("Wait — a ~{minutes} minute unit would be cut off by the quota window.");
+                    println!("  window reopens: {resume_at_utc}");
+                    println!("  wait:           {} minute(s)", wait_ms / 60_000);
+                    println!();
+                    println!("Being stopped mid-unit costs more than waiting: the work would be");
+                    println!("half-done, unvalidated and uncheckpointed.");
+                    // A distinct code so a script can tell "wait" from a real failure.
+                    std::process::exit(75);
+                }
+            }
         }
         Cmd::Begin { cwd, mission, unit } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;

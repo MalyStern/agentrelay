@@ -223,6 +223,18 @@ NEXT: use latest_quota_reset to schedule units around the wall instead of walkin
 into it; keepawake per-thread fix; Phase-2 (Mission-Contract state machine,
 Isolation-Ring, cost ledger + budget kill-switch).
 
+SCHEDULING AROUND THE WALL (2026-08-02): now that the provider reports resetsAt on
+healthy turns, two things became possible that the plan said were not.
+  1. A rate-limit message often omits the reset time; the planner used to fall
+     back to a fixed guess. It now prefers the time we were told on an earlier
+     healthy turn (store.latest_quota_reset), so a resume lands when the window
+     actually reopens instead of hours early or late.
+  2. quota::decide_start + Daemon::should_start_unit + `agentrelay fits --minutes N`
+     answer "does this unit fit in what's left of the window?" - exit 0 go, exit 75
+     wait, so a night script can gate on it. Unknown window = start (refusing to
+     work for lack of information is a worse failure than being interrupted).
+152 cargo tests.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

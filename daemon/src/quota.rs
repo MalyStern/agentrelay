@@ -68,6 +68,55 @@ pub fn plan_resume_after_rate_limit(
     }
 }
 
+/// What to do with a unit given how much of the window is left.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StartDecision {
+    /// There is room. Go.
+    Start,
+    /// The window closes before this unit could finish. Waiting until it reopens
+    /// costs less than starting work that will be cut in half.
+    WaitUntilReset { resume_at_utc: String, wait_ms: i64 },
+    /// We have no idea where the wall is, so we cannot reason about it. Start —
+    /// refusing to work because we lack information would be worse than the risk.
+    StartUnknownWindow,
+}
+
+/// Decide whether a unit fits in what remains of the quota window.
+///
+/// Only possible because the provider reports `resetsAt` on healthy turns; the
+/// plan assumed it did not, so this decision could not previously be made at all
+/// and every unit was started blind. Being cut off mid-unit is the expensive case:
+/// the work is half-done, unvalidated, and uncheckpointed, and resuming means
+/// re-establishing context the new session no longer has.
+pub fn decide_start(
+    reset_at_utc: Option<&str>,
+    now_utc: &str,
+    estimated_unit_ms: i64,
+    buffer_ms: Option<i64>,
+) -> StartDecision {
+    let buffer_ms = buffer_ms.unwrap_or(60_000);
+    let Some(reset) = reset_at_utc.and_then(to_ms) else {
+        return StartDecision::StartUnknownWindow;
+    };
+    let Some(now) = to_ms(now_utc) else {
+        return StartDecision::StartUnknownWindow;
+    };
+
+    let remaining = reset - now;
+    // Already past the reset: the window has reopened, nothing to wait for.
+    if remaining <= 0 {
+        return StartDecision::Start;
+    }
+    if remaining >= estimated_unit_ms {
+        return StartDecision::Start;
+    }
+    let resume_at = reset + buffer_ms;
+    StartDecision::WaitUntilReset {
+        resume_at_utc: to_iso(resume_at),
+        wait_ms: (resume_at - now).max(0),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifyDeadline {
     pub verify_by_utc: String,
@@ -166,6 +215,53 @@ mod tests {
             total_tokens: None,
             provenance: Provenance::Provider,
         }
+    }
+
+    const HOUR: i64 = 3_600_000;
+
+    #[test]
+    fn a_unit_that_fits_in_the_window_starts() {
+        assert_eq!(
+            decide_start(Some("2026-08-02T04:00:00Z"), "2026-08-02T01:00:00Z", HOUR, None),
+            StartDecision::Start,
+            "three hours left, one hour of work"
+        );
+    }
+
+    #[test]
+    fn a_unit_that_would_be_cut_in_half_waits_instead() {
+        // The expensive failure: work stopped mid-unit is unvalidated and
+        // uncheckpointed, and resuming means rebuilding context a fresh session
+        // does not have. Waiting twenty minutes beats that.
+        match decide_start(Some("2026-08-02T04:00:00Z"), "2026-08-02T03:40:00Z", HOUR, None) {
+            StartDecision::WaitUntilReset { resume_at_utc, wait_ms } => {
+                assert!(resume_at_utc.starts_with("2026-08-02T04:01"), "{resume_at_utc}");
+                assert!(wait_ms > 20 * 60_000 && wait_ms < 22 * 60_000, "{wait_ms}");
+            }
+            other => panic!("expected a wait, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_window_that_has_already_reopened_is_not_waited_for() {
+        assert_eq!(
+            decide_start(Some("2026-08-02T01:00:00Z"), "2026-08-02T03:00:00Z", HOUR, None),
+            StartDecision::Start
+        );
+    }
+
+    #[test]
+    fn not_knowing_where_the_wall_is_means_start_not_stop() {
+        // Refusing to work for lack of information would be a worse failure than
+        // occasionally being interrupted.
+        assert_eq!(
+            decide_start(None, "2026-08-02T01:00:00Z", HOUR, None),
+            StartDecision::StartUnknownWindow
+        );
+        assert_eq!(
+            decide_start(Some("not a timestamp"), "2026-08-02T01:00:00Z", HOUR, None),
+            StartDecision::StartUnknownWindow
+        );
     }
 
     #[test]

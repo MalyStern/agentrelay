@@ -115,9 +115,21 @@ pub async fn run_turn_supervised(
                     reset_at,
                 );
             }
-            AgentEvent::RateLimited { reset_at, .. } => {
+            AgentEvent::RateLimited { reset_at, provider, .. } => {
+                // A rate-limit message does not always carry the reset time — and
+                // when it doesn't, the planner falls back to a fixed guess. But the
+                // provider told us where the wall was on every healthy turn before
+                // this one, so we already know. Use the remembered time in
+                // preference to guessing: it is the difference between resuming
+                // when the window actually reopens and sleeping through it.
+                let remembered = if reset_at.is_empty() {
+                    store.latest_quota_reset(provider.as_deref().unwrap_or("claude"))
+                } else {
+                    None
+                };
+                let effective = remembered.as_deref().unwrap_or(reset_at);
                 outcome.resume_plan =
-                    Some(plan_resume_after_rate_limit(reset_at, now_utc, None, None));
+                    Some(plan_resume_after_rate_limit(effective, now_utc, None, None));
                 break;
             }
             _ => {}
@@ -202,6 +214,33 @@ mod tests {
             Some("2026-08-03T04:00:00+00:00"),
             "and the wall's location is remembered"
         );
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_with_no_reset_time_uses_the_one_we_were_told_earlier() {
+        // Real shape: healthy turns carry the reset time, the error that finally
+        // stops you often does not. Guessing there means either waking early and
+        // burning the retry, or sleeping hours past the window reopening.
+        let store = Store::open_in_memory().unwrap();
+        let turn = vec![
+            AgentEvent::QuotaHint {
+                reset_at: "2026-08-02T04:00:00+00:00".into(),
+                window: Some(QuotaWindow::FiveHour),
+                provider: Some("claude".into()),
+            },
+            AgentEvent::RateLimited {
+                reset_at: String::new(), // the provider did not say
+                window: None,
+                provider: Some("claude".into()),
+            },
+        ];
+        let fake = FakeAdapter::new("fake", vec![turn]);
+        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &[], &store, "m1", "2026-08-02T03:00:00Z").await.unwrap();
+
+        let plan = out.resume_plan.expect("a rate limit must produce a plan");
+        assert!(plan.resume_at_utc.starts_with("2026-08-02T04:01"), "{}", plan.resume_at_utc);
+        // An hour away, not the conservative default.
+        assert!(plan.wait_ms > 59 * 60_000 && plan.wait_ms < 62 * 60_000, "{}", plan.wait_ms);
     }
 
     #[tokio::test]

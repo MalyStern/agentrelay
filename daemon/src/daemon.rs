@@ -250,6 +250,18 @@ impl Daemon {
     /// looking like a safe point to return to; checkpointing on evidence means every
     /// commit in the morning is a state that actually built. When the gate fails
     /// nothing is committed — the work stays in the tree, visible and undone.
+    /// Should a unit of roughly this length be started now, or would it be cut off
+    /// by the quota window closing?
+    ///
+    /// Answerable only because the provider reports its reset time on healthy
+    /// turns. Being interrupted mid-unit is the expensive case — half-finished,
+    /// unvalidated, uncheckpointed work, and a fresh session that has lost the
+    /// context needed to continue it.
+    pub fn should_start_unit(&self, estimated_ms: i64, now_utc: &str) -> crate::quota::StartDecision {
+        let reset = self.store.latest_quota_reset(&self.config.program);
+        crate::quota::decide_start(reset.as_deref(), now_utc, estimated_ms, None)
+    }
+
     /// Record what the working tree looked like BEFORE the agent starts a unit.
     ///
     /// Everything already uncommitted at this moment belongs to the human. Without
