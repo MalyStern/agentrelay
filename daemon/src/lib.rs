@@ -23,6 +23,7 @@ pub mod error;
 pub mod events;
 pub mod fake_adapter;
 pub mod fixloop;
+pub mod graph;
 pub mod guard;
 pub mod hook;
 pub mod ipc;

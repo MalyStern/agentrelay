@@ -62,6 +62,11 @@ pub struct Config {
     /// whenever asked, and `status` says so.
     #[serde(default)]
     pub schedule: crate::calendar::Schedule,
+    /// Optional knowledge-graph reports via graphify (an external tool). Off unless
+    /// asked for, and never installs graphify itself — `status`/`doctor` say whether
+    /// it is available.
+    #[serde(default)]
+    pub graph: crate::graph::GraphConfig,
 }
 
 impl Default for Config {
@@ -82,6 +87,7 @@ impl Default for Config {
             fix_loop: crate::fixloop::FixLoopConfig::default(),
             cloud: crate::cloud::CloudConfig::default(),
             schedule: crate::calendar::Schedule::default(),
+            graph: crate::graph::GraphConfig::default(),
         }
     }
 }

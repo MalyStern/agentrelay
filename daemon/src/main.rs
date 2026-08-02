@@ -277,6 +277,20 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                     }
                 }
             }
+            // Optional: graphify powers the knowledge-graph reports. Its absence is a
+            // note, never a failure — the feature is off until it's installed.
+            match agentrelay::which::resolve("graphify") {
+                Some(p) => println!(
+                    "  [OK] {:<7} {} — knowledge-graph reports available",
+                    "graphify",
+                    p.display()
+                ),
+                None => println!(
+                    "  [--] {:<7} not installed (optional) — {}",
+                    "graphify",
+                    agentrelay::graph::install_hint()
+                ),
+            }
             if agentrelay::which::resolve("claude").is_none() {
                 println!();
                 println!("Without `claude` the daemon can supervise nothing — everything else");
