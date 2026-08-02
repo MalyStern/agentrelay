@@ -267,10 +267,32 @@ mod tests {
     /// that cannot run should not fail the suite on someone else's machine — but
     /// where it CAN run, asserting on flags proves nothing and this proves the
     /// property.
+    /// `docker_available()` only means the daemon answered `docker info`. That is true
+    /// on GitHub's Windows runners too — but their Docker is in Windows-container mode,
+    /// where a Linux image like alpine simply will not run. So probe with the actual
+    /// image this test uses; if `docker run alpine:3 true` cannot succeed, there is no
+    /// Linux container runtime here and the test skips instead of failing.
+    fn linux_container_runnable() -> bool {
+        if !docker_available() {
+            return false;
+        }
+        crate::which::std_command_for("docker")
+            .and_then(|mut c| {
+                c.args(["run", "--rm", "alpine:3", "true"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .stdin(std::process::Stdio::null())
+                    .status()
+                    .ok()
+            })
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn the_isolation_actually_holds_against_a_live_container() {
-        if !docker_available() {
-            eprintln!("skipping: docker not available");
+        if !linux_container_runnable() {
+            eprintln!("skipping: no Linux container runtime available");
             return;
         }
         let dir = std::env::temp_dir().join(format!("ar-iso-{}", std::process::id()));

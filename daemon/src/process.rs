@@ -52,6 +52,9 @@ impl ProcessGroup {
         {
             cmd.process_group(0); // the child becomes its own group leader
         }
+        // `mut` is needed on Windows (start_kill below takes &mut self); on Unix the
+        // child is only read, so clippy would flag the `mut` as unused there.
+        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut child = cmd
             .spawn()
             .map_err(|e| AgentRelayError::new(ErrorCode::ProcessSpawnFailed, e.to_string()))?;
