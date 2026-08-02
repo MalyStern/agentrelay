@@ -65,6 +65,20 @@ pub async fn run_turn_supervised(
             AgentEvent::ToolPre { tool, args } => {
                 let decision = evaluate_guards(&derive_actions(tool, args), guards, &cwd);
                 if !decision.allow {
+                    // Record WHAT was refused, not just that the turn stopped. A
+                    // guard that fires silently leaves the morning with an
+                    // unexplained halt: the report's whole job is to say why, and
+                    // "the agent tried to push / write outside the workspace" is the
+                    // single most important thing a night can tell you.
+                    for v in &decision.violations {
+                        let _ = store.append_event(&AppendEvent {
+                            mission_id: Some(mission_id.to_string()),
+                            actor: "watchtower".to_string(),
+                            kind: "guard.violation".to_string(),
+                            payload: serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+                            seq_in_turn: Some(outcome.events_seen as i64 - 1),
+                        });
+                    }
                     outcome.violations.extend(decision.violations);
                     // A blocked action stops the turn (Watchtower layer-1).
                     let _ = adapter.interrupt(handle).await;

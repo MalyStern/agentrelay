@@ -81,13 +81,37 @@ pub fn branch(cwd: &str) -> Option<String> {
 
 /// Paths with uncommitted changes, staged or not, including untracked files.
 pub fn dirty_paths(cwd: &str) -> Result<Vec<String>> {
-    let out = git_raw(cwd, &["status", "--porcelain", "--untracked-files=all"])?;
-    Ok(out
-        .lines()
-        .filter(|l| l.len() > 3)
-        .map(|l| l[3..].to_string())
-        .filter(|p| !p.is_empty())
-        .collect())
+    // `-z` with `core.quotePath=false`: the default output escapes non-ASCII paths
+    // into octal (`"\327\251..."`) and joins a rename as `old -> new` on one line,
+    // so a Hebrew filename came back mangled and a rename came back as a single
+    // path that does not exist. Both went straight into the morning report, and a
+    // report that renames your files is worse than no report. NUL-separated output
+    // is literal: no quoting, no escaping, and a rename is simply two records.
+    let out = git_raw(
+        cwd,
+        &["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+
+    let mut paths = Vec::new();
+    let mut it = out.split('\0').filter(|s| !s.is_empty());
+    while let Some(rec) = it.next() {
+        if rec.len() < 4 {
+            continue;
+        }
+        let status = &rec[..2];
+        let path = &rec[3..];
+        // A rename or copy emits the DESTINATION in this record and the source in
+        // the next one. The destination is the file that now exists, so it is the
+        // one the user cares about; consume the source so it is not read as a path
+        // of its own.
+        if status.starts_with('R') || status.starts_with('C') {
+            let _ = it.next();
+        }
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
+    Ok(paths)
 }
 
 pub fn is_clean(cwd: &str) -> Result<bool> {
@@ -315,6 +339,32 @@ mod tests {
             "the dot must survive: {dirty:?}"
         );
         assert!(dirty.contains(&"zz.txt".to_string()), "{dirty:?}");
+        cleanup(&p);
+    }
+
+    #[test]
+    fn non_ascii_and_renamed_paths_come_back_intact() {
+        // Default porcelain output escapes non-ASCII into octal and writes a rename
+        // as `old -> new` on one line. Both reached the morning report verbatim, so
+        // it named files the user does not have.
+        let p = repo();
+        let dir = std::path::Path::new(&p);
+        std::fs::write(dir.join("שלום.txt"), "hello\n").unwrap();
+        std::fs::write(dir.join("before.txt"), "content\n").unwrap();
+        git(&p, &["add", "-A"]).unwrap();
+        git(&p, &["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "add"]).unwrap();
+
+        std::fs::rename(dir.join("before.txt"), dir.join("after.txt")).unwrap();
+        std::fs::write(dir.join("שלום.txt"), "changed\n").unwrap();
+        git(&p, &["add", "-A"]).unwrap();
+
+        let dirty = dirty_paths(&p).unwrap();
+        assert!(dirty.contains(&"שלום.txt".to_string()), "octal-escaped: {dirty:?}");
+        assert!(dirty.contains(&"after.txt".to_string()), "the file that now exists: {dirty:?}");
+        assert!(
+            !dirty.iter().any(|d| d.contains("->")),
+            "a rename must not be reported as one impossible path: {dirty:?}"
+        );
         cleanup(&p);
     }
 

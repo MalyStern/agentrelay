@@ -156,11 +156,19 @@ capped at 1 MB (413). report scopes checkpoints to the mission's own units — g
 history held every checkpoint ever made, so last week's showed up this morning and
 `nothing_happened` could never be true again. 123 cargo tests.
 
-STILL OPEN from the audit: #12 rename/UTF-8 paths in porcelain (use -z + core.quotePath=false),
-keepawake is per-thread but held across awaits (use PowerCreateRequest), guard
-violations are not written to events/report, and install_guards is a no-op so
-Watchtower-1 is advisory (kill-after-the-fact) rather than a PreToolUse block —
-the biggest remaining gap vs plan §ז.4.
+AUDIT ROUND 3 (2026-08-02): guard violations are now appended to the event log as
+`guard.violation` and surfaced in the morning report ("BLOCKED by no_push: the
+agent tried … The turn was stopped") — they were enforced but never recorded, so
+the morning showed an unexplained halt. dirty_paths now uses `-z` +
+`core.quotePath=false`: default porcelain octal-escapes non-ASCII paths and writes
+a rename as `old -> new` on one line, both of which reached the report verbatim.
+125 cargo tests.
+
+STILL OPEN from the audit: keepawake is per-thread but held across awaits (needs
+PowerCreateRequest, which is per-process), and install_guards is a no-op so
+Watchtower-1 is advisory (kill-after-the-fact on an async pipe) rather than a
+deterministic PreToolUse block — the biggest remaining gap vs plan §ז.4. Doing
+that properly needs the Agent SDK / an MCP tool we own, per §ז.1.
 
 ## Done log (most recent first)
 

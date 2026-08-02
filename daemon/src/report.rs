@@ -205,6 +205,25 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
         });
     }
 
+    // What the supervisor refused. A guard that fired is the most important thing a
+    // night can report: it means the agent tried to do something you had ruled out.
+    for e in store.get_events(mission_id).unwrap_or_default() {
+        if e.kind != "guard.violation" {
+            continue;
+        }
+        let guard = e.payload.get("guard").and_then(|v| v.as_str()).unwrap_or("a guard");
+        let reason = e.payload.get("reason_code").and_then(|v| v.as_str()).unwrap_or("");
+        let detail = e.payload.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(Line {
+            provenance: Provenance::Recorded,
+            text: format!(
+                "BLOCKED by {guard}: the agent tried {reason}{}{}. The turn was stopped.",
+                if detail.is_empty() { "" } else { " — " },
+                detail
+            ),
+        });
+    }
+
     if let Ok(dirty) = crate::checkpoint::dirty_paths(cwd) {
         if !dirty.is_empty() {
             lines.push(Line {
@@ -341,6 +360,36 @@ mod tests {
         assert_eq!(r.units_uncheckpointed, 1);
         assert!(r.headline().contains("NO restore point"), "{}", r.headline());
         assert!(r.needs_attention());
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn a_guard_that_fired_is_the_headline_of_the_night() {
+        // Guards were enforced but never recorded, so the morning showed an
+        // unexplained halt. "The agent tried to push" is the single most important
+        // thing a night can tell you.
+        let store = Store::open_in_memory().unwrap();
+        let cwd = tmp_repo();
+        store
+            .append_event(&crate::store::AppendEvent {
+                mission_id: Some("m1".into()),
+                actor: "watchtower".into(),
+                kind: "guard.violation".into(),
+                payload: serde_json::json!({
+                    "guard": "no_push",
+                    "reason_code": "guard.no_push",
+                    "detail": "git push origin main"
+                }),
+                seq_in_turn: Some(3),
+            })
+            .unwrap();
+
+        let r = build(&store, "m1", &cwd, 0);
+        let text = r.render();
+        assert!(text.contains("BLOCKED by no_push"), "{text}");
+        assert!(text.contains("git push origin main"), "and what exactly: {text}");
+        assert!(text.contains("[RECORDED]"));
+        assert!(!r.nothing_happened, "a blocked action is not a quiet night");
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
