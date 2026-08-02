@@ -16,7 +16,8 @@ pub struct ClaudeParseResult {
 }
 
 static RE_RATE_LIMIT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)rate.?limit|usage limit|too many requests|\b429\b|quota (?:exceeded|reached)").unwrap()
+    Regex::new(r"(?i)rate.?limit|usage limit|too many requests|\b429\b|quota (?:exceeded|reached)")
+        .unwrap()
 });
 
 pub fn looks_like_rate_limit(text: &str) -> bool {
@@ -30,14 +31,17 @@ pub fn looks_like_rate_limit(text: &str) -> bool {
 /// admitting we do not know one.
 pub fn parse_reset_at(text: &str) -> Option<String> {
     static RE_RFC3339: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?")
-            .unwrap()
+        Regex::new(
+            r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?",
+        )
+        .unwrap()
     });
     if let Some(m) = RE_RFC3339.find(text) {
         return Some(m.as_str().to_string());
     }
     // e.g. "resets at 1735689600" — a bare 10-digit epoch in a plausible range.
-    static RE_EPOCH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(1[6-9]\d{8}|2[0-9]\d{8})\b").unwrap());
+    static RE_EPOCH: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\b(1[6-9]\d{8}|2[0-9]\d{8})\b").unwrap());
     let secs: i64 = RE_EPOCH.find(text)?.as_str().parse().ok()?;
     chrono::DateTime::from_timestamp(secs, 0).map(|d| d.to_rfc3339())
 }
@@ -66,7 +70,10 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
         Some(o) => o,
         None => return ClaudeParseResult::default(),
     };
-    let session_id = obj.get("session_id").and_then(|v| v.as_str()).map(String::from);
+    let session_id = obj
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let mut out = ClaudeParseResult {
         session_id: session_id.clone(),
         ..Default::default()
@@ -80,7 +87,11 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
             }
         }
         "assistant" => {
-            if let Some(content) = obj.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
+            if let Some(content) = obj
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
                 for block in content {
                     match block.get("type").and_then(|v| v.as_str()) {
                         Some("text") => {
@@ -102,7 +113,11 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
             }
         }
         "user" => {
-            if let Some(content) = obj.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
+            if let Some(content) = obj
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
                 for block in content {
                     if block.get("type").and_then(|v| v.as_str()) == Some("tool_result") {
                         out.events.push(AgentEvent::ToolPost {
@@ -188,7 +203,10 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
             }
             let usage = map_usage(obj.get("usage").unwrap_or(&Value::Null));
             let subtype = obj.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-            let is_error = obj.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false)
+            let is_error = obj
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
                 || subtype.starts_with("error");
             let text = [obj.get("result"), obj.get("error")]
                 .iter()
@@ -213,12 +231,20 @@ pub fn parse_claude_line(line: &Value) -> ClaudeParseResult {
                 // The Error is kept as well so the timeline still shows what the
                 // provider actually said.
                 out.events.push(AgentEvent::Error {
-                    message: if text.trim().is_empty() { "rate limited".into() } else { text },
+                    message: if text.trim().is_empty() {
+                        "rate limited".into()
+                    } else {
+                        text
+                    },
                     code: Some("quota.rate_limited".into()),
                 });
             } else if is_error {
                 out.events.push(AgentEvent::Error {
-                    message: if text.trim().is_empty() { "error".into() } else { text },
+                    message: if text.trim().is_empty() {
+                        "error".into()
+                    } else {
+                        text
+                    },
                     code: Some("provider.stream_error".into()),
                 });
             } else {
@@ -294,42 +320,88 @@ mod tests {
 
     #[test]
     fn init_gives_turn_started_and_session() {
-        let r = parse_claude_line(&json!({"type":"system","subtype":"init","session_id":"sess_abc"}));
+        let r =
+            parse_claude_line(&json!({"type":"system","subtype":"init","session_id":"sess_abc"}));
         assert_eq!(r.events, vec![AgentEvent::TurnStarted]);
         assert_eq!(r.session_id.as_deref(), Some("sess_abc"));
     }
 
     #[test]
     fn assistant_text_and_tool() {
-        let r = parse_claude_line(&json!({"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}));
-        assert_eq!(r.events, vec![AgentEvent::TextDelta { text: "hello".into() }]);
-        let r2 = parse_claude_line(&json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}));
-        assert_eq!(r2.events, vec![AgentEvent::ToolPre { tool: "Bash".into(), args: json!({"command":"ls"}) }]);
+        let r = parse_claude_line(
+            &json!({"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}),
+        );
+        assert_eq!(
+            r.events,
+            vec![AgentEvent::TextDelta {
+                text: "hello".into()
+            }]
+        );
+        let r2 = parse_claude_line(
+            &json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}),
+        );
+        assert_eq!(
+            r2.events,
+            vec![AgentEvent::ToolPre {
+                tool: "Bash".into(),
+                args: json!({"command":"ls"})
+            }]
+        );
     }
 
     #[test]
     fn user_tool_result() {
-        let r = parse_claude_line(&json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}));
-        assert_eq!(r.events, vec![AgentEvent::ToolPost { tool: "t1".into(), result: json!("ok") }]);
+        let r = parse_claude_line(
+            &json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}),
+        );
+        assert_eq!(
+            r.events,
+            vec![AgentEvent::ToolPost {
+                tool: "t1".into(),
+                result: json!("ok")
+            }]
+        );
     }
 
     #[test]
     fn result_success_maps_usage() {
-        let r = parse_claude_line(&json!({"type":"result","subtype":"success","is_error":false,"session_id":"s","usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":20}}));
+        let r = parse_claude_line(
+            &json!({"type":"result","subtype":"success","is_error":false,"session_id":"s","usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":20}}),
+        );
         assert!(r.done);
-        assert_eq!(r.events, vec![AgentEvent::TurnCompleted { usage: Usage { input_tokens: 100, output_tokens: 40, cache_read_tokens: Some(20), cache_creation_tokens: None, total_tokens: None, provenance: Provenance::Provider } }]);
+        assert_eq!(
+            r.events,
+            vec![AgentEvent::TurnCompleted {
+                usage: Usage {
+                    input_tokens: 100,
+                    output_tokens: 40,
+                    cache_read_tokens: Some(20),
+                    cache_creation_tokens: None,
+                    total_tokens: None,
+                    provenance: Provenance::Provider
+                }
+            }]
+        );
     }
 
     #[test]
     fn result_rate_limit_and_generic_error() {
-        let r = parse_claude_line(&json!({"type":"result","subtype":"error_during_execution","is_error":true,"result":"You have hit the usage limit"}));
+        let r = parse_claude_line(
+            &json!({"type":"result","subtype":"error_during_execution","is_error":true,"result":"You have hit the usage limit"}),
+        );
         // A rate limit now yields BOTH: the RateLimited the quota layer acts on,
         // and the Error the timeline shows.
-        assert!(r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+        assert!(r
+            .events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RateLimited { .. })));
         assert!(r.events.iter().any(
-            |e| matches!(e, AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited")));
+            |e| matches!(e, AgentEvent::Error { code: Some(c), .. } if c == "quota.rate_limited")
+        ));
         let r2 = parse_claude_line(&json!({"type":"result","is_error":true,"error":"boom"}));
-        assert!(matches!(&r2.events[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error"));
+        assert!(
+            matches!(&r2.events[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error")
+        );
     }
 
     #[test]
@@ -348,15 +420,25 @@ mod tests {
                 "tool_input": {"file_path": "C:\\proj\\.env", "content": "FOO=bar"}
             }]
         }));
-        match r.events.iter().find(|e| matches!(e, AgentEvent::ToolDenied { .. })) {
+        match r
+            .events
+            .iter()
+            .find(|e| matches!(e, AgentEvent::ToolDenied { .. }))
+        {
             Some(AgentEvent::ToolDenied { tool, args }) => {
                 assert_eq!(tool, "Write");
-                assert!(args.get("file_path").is_some(), "the attempt is kept, for the report");
+                assert!(
+                    args.get("file_path").is_some(),
+                    "the attempt is kept, for the report"
+                );
             }
             _ => panic!("no ToolDenied in {:?}", r.events),
         }
         // A clean turn still completes: a denial is not a failure of the turn.
-        assert!(r.events.iter().any(|e| matches!(e, AgentEvent::TurnCompleted { .. })));
+        assert!(r
+            .events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TurnCompleted { .. })));
     }
 
     #[test]
@@ -365,7 +447,10 @@ mod tests {
             "type": "result", "subtype": "success", "is_error": false,
             "result": "ok", "permission_denials": []
         }));
-        assert!(!r.events.iter().any(|e| matches!(e, AgentEvent::ToolDenied { .. })));
+        assert!(!r
+            .events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolDenied { .. })));
     }
 
     #[test]
@@ -384,7 +469,9 @@ mod tests {
             "session_id": "s1"
         }));
         match r.events.first() {
-            Some(AgentEvent::QuotaHint { reset_at, window, .. }) => {
+            Some(AgentEvent::QuotaHint {
+                reset_at, window, ..
+            }) => {
                 assert!(reset_at.starts_with("2026-"), "epoch decoded: {reset_at}");
                 assert_eq!(*window, Some(QuotaWindow::FiveHour));
             }
@@ -392,7 +479,10 @@ mod tests {
         }
         // Critically NOT RateLimited: status is "allowed". Treating a healthy
         // heartbeat as the wall would abort every turn the moment it started.
-        assert!(!r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+        assert!(!r
+            .events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RateLimited { .. })));
         assert!(!r.done);
     }
 
@@ -403,7 +493,9 @@ mod tests {
             "rate_limit_info": {"status":"blocked","resetsAt": 1785648600i64,"rateLimitType":"weekly"}
         }));
         match r.events.first() {
-            Some(AgentEvent::RateLimited { window, reset_at, .. }) => {
+            Some(AgentEvent::RateLimited {
+                window, reset_at, ..
+            }) => {
                 assert_eq!(*window, Some(QuotaWindow::Weekly));
                 assert!(!reset_at.is_empty());
             }
@@ -474,13 +566,24 @@ mod tests {
             "error": "rate limit exceeded, resets at 2026-08-03T04:00:00Z"
         }));
         assert!(
-            r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })),
+            r.events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::RateLimited { .. })),
             "no RateLimited emitted: {:?}",
             r.events
         );
-        match r.events.iter().find(|e| matches!(e, AgentEvent::RateLimited { .. })) {
-            Some(AgentEvent::RateLimited { reset_at, provider, .. }) => {
-                assert_eq!(reset_at, "2026-08-03T04:00:00Z", "the reset time is carried through");
+        match r
+            .events
+            .iter()
+            .find(|e| matches!(e, AgentEvent::RateLimited { .. }))
+        {
+            Some(AgentEvent::RateLimited {
+                reset_at, provider, ..
+            }) => {
+                assert_eq!(
+                    reset_at, "2026-08-03T04:00:00Z",
+                    "the reset time is carried through"
+                );
                 assert_eq!(provider.as_deref(), Some("claude"));
             }
             _ => unreachable!(),
@@ -496,8 +599,14 @@ mod tests {
         // Not knowing when the window reopens is normal; the quota layer has a
         // conservative fallback. Dropping the event because a field is missing
         // would turn a recoverable pause into a dead run.
-        let r = parse_claude_line(&json!({"type":"result","is_error":true,"error":"429 too many requests"}));
-        match r.events.iter().find(|e| matches!(e, AgentEvent::RateLimited { .. })) {
+        let r = parse_claude_line(
+            &json!({"type":"result","is_error":true,"error":"429 too many requests"}),
+        );
+        match r
+            .events
+            .iter()
+            .find(|e| matches!(e, AgentEvent::RateLimited { .. }))
+        {
             Some(AgentEvent::RateLimited { reset_at, .. }) => assert!(reset_at.is_empty()),
             _ => panic!("expected RateLimited: {:?}", r.events),
         }
@@ -505,8 +614,12 @@ mod tests {
 
     #[test]
     fn an_ordinary_error_is_not_mistaken_for_a_rate_limit() {
-        let r = parse_claude_line(&json!({"type":"result","is_error":true,"error":"compile failed"}));
-        assert!(!r.events.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+        let r =
+            parse_claude_line(&json!({"type":"result","is_error":true,"error":"compile failed"}));
+        assert!(!r
+            .events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RateLimited { .. })));
     }
 
     #[test]
@@ -515,7 +628,10 @@ mod tests {
             parse_reset_at("try again after 2026-08-03T04:00:00Z").as_deref(),
             Some("2026-08-03T04:00:00Z")
         );
-        assert!(parse_reset_at("resets at 1893456000").is_some(), "unix epoch");
+        assert!(
+            parse_reset_at("resets at 1893456000").is_some(),
+            "unix epoch"
+        );
         assert_eq!(parse_reset_at("rate limited, try later"), None);
         // A version number must not be read as a timestamp.
         assert_eq!(parse_reset_at("rate limit in v1.2.3"), None);
@@ -523,7 +639,12 @@ mod tests {
 
     #[test]
     fn looks_like_rate_limit_works() {
-        for s in ["rate limit exceeded", "usage limit reached", "Error 429", "too many requests"] {
+        for s in [
+            "rate limit exceeded",
+            "usage limit reached",
+            "Error 429",
+            "too many requests",
+        ] {
             assert!(looks_like_rate_limit(s), "{s}");
         }
         assert!(!looks_like_rate_limit("build succeeded"));
@@ -543,9 +664,22 @@ mod tests {
         let mut events = parser.push(&ndjson[..mid]);
         events.extend(parser.push(&ndjson[mid..]));
         assert_eq!(
-            events.iter().map(|e| std::mem::discriminant(e)).collect::<Vec<_>>(),
-            [AgentEvent::TurnStarted, AgentEvent::TextDelta { text: String::new() }, AgentEvent::TurnCompleted { usage: Usage::zero() }]
-                .iter().map(std::mem::discriminant).collect::<Vec<_>>()
+            events
+                .iter()
+                .map(std::mem::discriminant)
+                .collect::<Vec<_>>(),
+            [
+                AgentEvent::TurnStarted,
+                AgentEvent::TextDelta {
+                    text: String::new()
+                },
+                AgentEvent::TurnCompleted {
+                    usage: Usage::zero()
+                }
+            ]
+            .iter()
+            .map(std::mem::discriminant)
+            .collect::<Vec<_>>()
         );
         assert_eq!(parser.session_id(), Some("sess_1"));
         assert!(parser.done());

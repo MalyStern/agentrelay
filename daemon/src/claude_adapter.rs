@@ -8,14 +8,11 @@ use crate::adapter::{EventStream, ProviderAdapter};
 use crate::claude_stream::ClaudeStreamParser;
 use crate::error::{AgentRelayError, ErrorCode, Result};
 use crate::process::ProcessGroup;
-use crate::provider::{
-    Capabilities, Guard, QuotaState, SessionHandle, SessionSpec, TurnInput,
-};
+use crate::provider::{Capabilities, Guard, QuotaState, SessionHandle, SessionSpec, TurnInput};
 use async_trait::async_trait;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 /// Spawn `program args` in `cwd` INTO A KILL-GROUP, stream its stdout through the
 /// Claude parser, and return the event stream plus the group — so `interrupt` can
@@ -196,7 +193,12 @@ mod tests {
     fn node_emit(lines: &[serde_json::Value]) -> Vec<String> {
         let script = lines
             .iter()
-            .map(|l| format!("process.stdout.write({}+'\\n');", serde_json::to_string(&l.to_string()).unwrap()))
+            .map(|l| {
+                format!(
+                    "process.stdout.write({}+'\\n');",
+                    serde_json::to_string(&l.to_string()).unwrap()
+                )
+            })
             .collect::<String>();
         vec!["-e".into(), script]
     }
@@ -217,10 +219,20 @@ mod tests {
         let kinds: Vec<_> = events.iter().map(std::mem::discriminant).collect();
         let expected = [
             AgentEvent::TurnStarted,
-            AgentEvent::TextDelta { text: String::new() },
-            AgentEvent::TurnCompleted { usage: crate::events::Usage::zero() },
+            AgentEvent::TextDelta {
+                text: String::new(),
+            },
+            AgentEvent::TurnCompleted {
+                usage: crate::events::Usage::zero(),
+            },
         ];
-        assert_eq!(kinds, expected.iter().map(std::mem::discriminant).collect::<Vec<_>>());
+        assert_eq!(
+            kinds,
+            expected
+                .iter()
+                .map(std::mem::discriminant)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
@@ -237,10 +249,11 @@ mod tests {
         use tokio::time::timeout;
         // Emit one line, then keep the process alive forever.
         let script = "process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'hi'}]}})+'\\n');setTimeout(()=>{},60000);";
-        let (mut stream, group) = match spawn_stream_json("node", &["-e".into(), script.into()], ".") {
-            Ok(t) => t,
-            Err(e) => panic!("spawn: {e:?}"),
-        };
+        let (mut stream, group) =
+            match spawn_stream_json("node", &["-e".into(), script.into()], ".") {
+                Ok(t) => t,
+                Err(e) => panic!("spawn: {e:?}"),
+            };
         let first = stream.next().await;
         assert!(matches!(first, Some(AgentEvent::TextDelta { .. })));
         group.kill_tree().unwrap();
@@ -255,10 +268,23 @@ mod tests {
     #[tokio::test]
     async fn run_turn_builds_resume_args() {
         let a = ClaudeAdapter::new();
-        let h = SessionHandle { id: "x".into(), external_id: Some("sess_1".into()), provider: "claude-code".into(), cwd: ".".into() };
-        let args = a.turn_args(&h, &TurnInput { prompt: "go".into(), read_only: false });
+        let h = SessionHandle {
+            id: "x".into(),
+            external_id: Some("sess_1".into()),
+            provider: "claude-code".into(),
+            cwd: ".".into(),
+        };
+        let args = a.turn_args(
+            &h,
+            &TurnInput {
+                prompt: "go".into(),
+                read_only: false,
+            },
+        );
         assert!(args.contains(&"--resume".to_string()));
         assert!(args.contains(&"sess_1".to_string()));
-        assert!(args.windows(2).any(|w| w == ["--output-format", "stream-json"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--output-format", "stream-json"]));
     }
 }

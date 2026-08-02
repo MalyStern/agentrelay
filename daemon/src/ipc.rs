@@ -54,17 +54,14 @@ pub async fn serve(daemon: Arc<Mutex<Daemon>>, bind: &str) -> Result<IpcHandle> 
         .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
     let tok = token.clone();
     let task = tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    let d = daemon.clone();
-                    let t = tok.clone();
-                    tokio::spawn(async move {
-                        let _ = handle_conn(stream, d, t).await;
-                    });
-                }
-                Err(_) => break,
-            }
+        // A failed accept ends the loop — a listener that stops accepting is not
+        // something to spin on.
+        while let Ok((stream, _)) = listener.accept().await {
+            let d = daemon.clone();
+            let t = tok.clone();
+            tokio::spawn(async move {
+                let _ = handle_conn(stream, d, t).await;
+            });
         }
     });
     Ok(IpcHandle { addr, token, task })
@@ -127,7 +124,12 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-async fn respond(stream: &mut TcpStream, code: u16, reason: &str, body: &str) -> std::io::Result<()> {
+async fn respond(
+    stream: &mut TcpStream,
+    code: u16,
+    reason: &str,
+    body: &str,
+) -> std::io::Result<()> {
     // CORS, so a UI opened from a file:// page (origin `null`) or any local origin can
     // actually reach this. It looks permissive, and for a normal web server it would
     // be reckless — but every route here except /health is gated by an unguessable
@@ -149,7 +151,11 @@ async fn respond(stream: &mut TcpStream, code: u16, reason: &str, body: &str) ->
     stream.flush().await
 }
 
-async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: String) -> std::io::Result<()> {
+async fn handle_conn(
+    mut stream: TcpStream,
+    daemon: Arc<Mutex<Daemon>>,
+    token: String,
+) -> std::io::Result<()> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     let header_end = loop {
@@ -162,7 +168,13 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
             break pos + 4;
         }
         if buf.len() > 64 * 1024 {
-            return respond(&mut stream, 431, "Too Large", "{\"error\":\"headers too large\"}").await;
+            return respond(
+                &mut stream,
+                431,
+                "Too Large",
+                "{\"error\":\"headers too large\"}",
+            )
+            .await;
         }
     };
 
@@ -201,10 +213,22 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
     // body. Reading first meant an unauthenticated caller could make us allocate
     // whatever it asked for, and only then be told it was unauthorised.
     if auth != format!("Bearer {token}") {
-        return respond(&mut stream, 401, "Unauthorized", "{\"error\":\"unauthorized\"}").await;
+        return respond(
+            &mut stream,
+            401,
+            "Unauthorized",
+            "{\"error\":\"unauthorized\"}",
+        )
+        .await;
     }
     if content_length > MAX_BODY {
-        return respond(&mut stream, 413, "Payload Too Large", "{\"error\":\"body too large\"}").await;
+        return respond(
+            &mut stream,
+            413,
+            "Payload Too Large",
+            "{\"error\":\"body too large\"}",
+        )
+        .await;
     }
 
     let mut body = buf[header_end..].to_vec();
@@ -215,8 +239,13 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
         }
         body.extend_from_slice(&tmp[..n]);
         if body.len() > MAX_BODY {
-            return respond(&mut stream, 413, "Payload Too Large", "{\"error\":\"body too large\"}")
-                .await;
+            return respond(
+                &mut stream,
+                413,
+                "Payload Too Large",
+                "{\"error\":\"body too large\"}",
+            )
+            .await;
         }
     }
     body.truncate(content_length);
@@ -232,7 +261,11 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
             // worth moving off the runtime for a loopback admin endpoint used by one
             // person's UI. If this ever serves something with real concurrency, that
             // is the moment to reconsider, not before.
-            let report = daemon.lock().await.morning_report(&mission, &cwd).envelope();
+            let report = daemon
+                .lock()
+                .await
+                .morning_report(&mission, &cwd)
+                .envelope();
             let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
             respond(&mut stream, 200, "OK", &json).await
         }
@@ -262,7 +295,15 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
                     }
                 }
             }
-            Err(_) => respond(&mut stream, 400, "Bad Request", "{\"error\":\"invalid body\"}").await,
+            Err(_) => {
+                respond(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    "{\"error\":\"invalid body\"}",
+                )
+                .await
+            }
         },
         _ => respond(&mut stream, 404, "Not Found", "{\"error\":\"not found\"}").await,
     }
@@ -291,7 +332,8 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static C: AtomicUsize = AtomicUsize::new(0);
         let n = C.fetch_add(1, Ordering::SeqCst);
-        let root = std::env::temp_dir().join(format!("agentrelay-ipc-{}-{}", std::process::id(), n));
+        let root =
+            std::env::temp_dir().join(format!("agentrelay-ipc-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Arc::new(Mutex::new(Daemon::init(&root).unwrap()))
@@ -401,12 +443,17 @@ mod tests {
         let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
         // Read the raw response so we can see the headers, not just the body.
         let mut s = TcpStream::connect(h.addr).await.unwrap();
-        s.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        s.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
         let mut raw = Vec::new();
         s.read_to_end(&mut raw).await.unwrap();
         let text = String::from_utf8_lossy(&raw).to_lowercase();
         assert!(text.contains("access-control-allow-origin: *"), "{text}");
-        assert!(text.contains("access-control-allow-headers: authorization"), "{text}");
+        assert!(
+            text.contains("access-control-allow-headers: authorization"),
+            "{text}"
+        );
         h.task.abort();
     }
 
@@ -426,10 +473,17 @@ mod tests {
         let (code, _) = request(h.addr, "GET /status HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert_eq!(code, 401);
         // wrong token -> 401
-        let (code2, _) = request(h.addr, "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer nope\r\n\r\n").await;
+        let (code2, _) = request(
+            h.addr,
+            "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer nope\r\n\r\n",
+        )
+        .await;
         assert_eq!(code2, 401);
         // correct token -> 200 with the status JSON
-        let req = format!("GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\n\r\n", h.token);
+        let req = format!(
+            "GET /status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\n\r\n",
+            h.token
+        );
         let (code3, body) = request(h.addr, &req).await;
         assert_eq!(code3, 200);
         assert!(body.contains("schema_version"));
@@ -439,7 +493,10 @@ mod tests {
     #[tokio::test]
     async fn unknown_route_is_404() {
         let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
-        let req = format!("GET /nope HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\n\r\n", h.token);
+        let req = format!(
+            "GET /nope HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\n\r\n",
+            h.token
+        );
         let (code, _) = request(h.addr, &req).await;
         assert_eq!(code, 404);
         h.task.abort();

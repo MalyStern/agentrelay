@@ -5,9 +5,7 @@
 use crate::adapter::{EventStream, ProviderAdapter};
 use crate::error::{AgentRelayError, ErrorCode, Result};
 use crate::events::{AgentEvent, Usage};
-use crate::provider::{
-    Capabilities, Guard, QuotaState, SessionHandle, SessionSpec, TurnInput,
-};
+use crate::provider::{Capabilities, Guard, QuotaState, SessionHandle, SessionSpec, TurnInput};
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -37,7 +35,10 @@ impl FakeAdapter {
     pub fn new(id: impl Into<String>, turns: Vec<Vec<AgentEvent>>) -> Self {
         let id = id.into();
         FakeAdapter {
-            quota: QuotaState { provider: id.clone(), windows: vec![] },
+            quota: QuotaState {
+                provider: id.clone(),
+                windows: vec![],
+            },
             id,
             turns: Mutex::new(turns.into()),
             caps: Capabilities {
@@ -88,9 +89,10 @@ impl ProviderAdapter for FakeAdapter {
                 ErrorCode::SessionGarbageCollected,
                 format!("session {external_id} was garbage-collected"),
             )),
-            ResumeBehavior::NotFound => {
-                Err(AgentRelayError::new(ErrorCode::SessionNotFound, format!("session {external_id} not found")))
-            }
+            ResumeBehavior::NotFound => Err(AgentRelayError::new(
+                ErrorCode::SessionNotFound,
+                format!("session {external_id} not found"),
+            )),
             ResumeBehavior::Ok => {
                 let n = self.handle_counter.fetch_add(1, Ordering::SeqCst) + 1;
                 Ok(SessionHandle {
@@ -104,12 +106,11 @@ impl ProviderAdapter for FakeAdapter {
     }
 
     async fn run_turn(&self, _handle: &SessionHandle, _input: TurnInput) -> Result<EventStream> {
-        let events = self
-            .turns
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| vec![AgentEvent::TurnCompleted { usage: Usage::zero() }]);
+        let events = self.turns.lock().unwrap().pop_front().unwrap_or_else(|| {
+            vec![AgentEvent::TurnCompleted {
+                usage: Usage::zero(),
+            }]
+        });
         let interrupted = self.interrupted.clone();
         interrupted.store(false, Ordering::SeqCst);
         let stream = async_stream::stream! {
@@ -139,7 +140,10 @@ impl ProviderAdapter for FakeAdapter {
     }
 
     async fn install_guards(&self, _handle: &SessionHandle, guards: &[Guard]) -> Result<()> {
-        self.installed_guards.lock().unwrap().extend_from_slice(guards);
+        self.installed_guards
+            .lock()
+            .unwrap()
+            .extend_from_slice(guards);
         Ok(())
     }
 }
@@ -154,25 +158,55 @@ mod tests {
         Usage::zero()
     }
     fn handle() -> SessionHandle {
-        SessionHandle { id: "s".into(), external_id: None, provider: "fake".into(), cwd: "/w".into() }
+        SessionHandle {
+            id: "s".into(),
+            external_id: None,
+            provider: "fake".into(),
+            cwd: "/w".into(),
+        }
     }
 
     #[tokio::test]
     async fn yields_scripted_turns_in_order() {
-        let t1 = vec![AgentEvent::TurnStarted, AgentEvent::TextDelta { text: "a".into() }, AgentEvent::TurnCompleted { usage: usage() }];
+        let t1 = vec![
+            AgentEvent::TurnStarted,
+            AgentEvent::TextDelta { text: "a".into() },
+            AgentEvent::TurnCompleted { usage: usage() },
+        ];
         let fake = FakeAdapter::new("fake", vec![t1.clone()]);
-        let got: Vec<_> = fake.run_turn(&handle(), TurnInput::default()).await.unwrap().collect().await;
+        let got: Vec<_> = fake
+            .run_turn(&handle(), TurnInput::default())
+            .await
+            .unwrap()
+            .collect()
+            .await;
         assert_eq!(got, t1);
         // exhausted -> default completed
-        let got2: Vec<_> = fake.run_turn(&handle(), TurnInput::default()).await.unwrap().collect().await;
-        assert!(matches!(got2.last(), Some(AgentEvent::TurnCompleted { .. })));
+        let got2: Vec<_> = fake
+            .run_turn(&handle(), TurnInput::default())
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert!(matches!(
+            got2.last(),
+            Some(AgentEvent::TurnCompleted { .. })
+        ));
     }
 
     #[tokio::test]
     async fn interrupt_stops_stream_mid_turn() {
-        let turn = vec![AgentEvent::TurnStarted, AgentEvent::TextDelta { text: "one".into() }, AgentEvent::TextDelta { text: "two".into() }, AgentEvent::TurnCompleted { usage: usage() }];
+        let turn = vec![
+            AgentEvent::TurnStarted,
+            AgentEvent::TextDelta { text: "one".into() },
+            AgentEvent::TextDelta { text: "two".into() },
+            AgentEvent::TurnCompleted { usage: usage() },
+        ];
         let fake = FakeAdapter::new("fake", vec![turn]);
-        let mut stream = fake.run_turn(&handle(), TurnInput::default()).await.unwrap();
+        let mut stream = fake
+            .run_turn(&handle(), TurnInput::default())
+            .await
+            .unwrap();
         let mut seen = Vec::new();
         while let Some(e) = stream.next().await {
             let stop = matches!(&e, AgentEvent::TextDelta { text } if text == "one");
@@ -187,18 +221,42 @@ mod tests {
 
     #[tokio::test]
     async fn resume_behaviors_surface_errors() {
-        let spec = SessionSpec { cwd: "/w".into(), ..Default::default() };
-        assert!(FakeAdapter::new("f", vec![]).resume_session("ext", spec.clone()).await.is_ok());
-        let gc = FakeAdapter::new("f", vec![]).with_resume_behavior(ResumeBehavior::GarbageCollected);
-        assert_eq!(gc.resume_session("ext", spec.clone()).await.unwrap_err().code, ErrorCode::SessionGarbageCollected);
+        let spec = SessionSpec {
+            cwd: "/w".into(),
+            ..Default::default()
+        };
+        assert!(FakeAdapter::new("f", vec![])
+            .resume_session("ext", spec.clone())
+            .await
+            .is_ok());
+        let gc =
+            FakeAdapter::new("f", vec![]).with_resume_behavior(ResumeBehavior::GarbageCollected);
+        assert_eq!(
+            gc.resume_session("ext", spec.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::SessionGarbageCollected
+        );
         let nf = FakeAdapter::new("f", vec![]).with_resume_behavior(ResumeBehavior::NotFound);
-        assert_eq!(nf.resume_session("ext", spec).await.unwrap_err().code, ErrorCode::SessionNotFound);
+        assert_eq!(
+            nf.resume_session("ext", spec).await.unwrap_err().code,
+            ErrorCode::SessionNotFound
+        );
     }
 
     #[tokio::test]
     async fn records_guards_and_steers() {
         let fake = FakeAdapter::new("f", vec![]);
-        fake.install_guards(&handle(), &[Guard::new(GuardKind::NoPush), Guard::new(GuardKind::ReadOnly)]).await.unwrap();
+        fake.install_guards(
+            &handle(),
+            &[
+                Guard::new(GuardKind::NoPush),
+                Guard::new(GuardKind::ReadOnly),
+            ],
+        )
+        .await
+        .unwrap();
         fake.steer(&handle(), "focus").await.unwrap();
         assert_eq!(fake.installed_guards.lock().unwrap().len(), 2);
         assert_eq!(fake.steers.lock().unwrap().as_slice(), ["focus"]);

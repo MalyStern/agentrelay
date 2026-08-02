@@ -37,7 +37,11 @@ pub enum Incoming {
     /// A response to a request we sent.
     Response { id: u64, result: Value },
     /// The peer reported an error for one of our requests.
-    Error { id: Option<u64>, code: i64, message: String },
+    Error {
+        id: Option<u64>,
+        code: i64,
+        message: String,
+    },
     /// A stream update, translated into our own events. May be empty when the
     /// notification carries nothing we model.
     Events(Vec<AgentEvent>),
@@ -54,7 +58,9 @@ fn usage_from(v: &Value) -> Usage {
         // Both spellings appear in the wild; accepting one and silently zeroing the
         // other would make every turn look free.
         input_tokens: g("inputTokens").or_else(|| g("input_tokens")).unwrap_or(0),
-        output_tokens: g("outputTokens").or_else(|| g("output_tokens")).unwrap_or(0),
+        output_tokens: g("outputTokens")
+            .or_else(|| g("output_tokens"))
+            .unwrap_or(0),
         cache_read_tokens: g("cacheReadTokens").or_else(|| g("cache_read_tokens")),
         cache_creation_tokens: g("cacheCreationTokens").or_else(|| g("cache_creation_tokens")),
         total_tokens: g("totalTokens").or_else(|| g("total_tokens")),
@@ -85,7 +91,10 @@ pub fn parse_incoming(line: &str) -> Incoming {
 
     // A response carries both an id and a result.
     if let (Some(id), Some(result)) = (v.get("id").and_then(|i| i.as_u64()), v.get("result")) {
-        return Incoming::Response { id, result: result.clone() };
+        return Incoming::Response {
+            id,
+            result: result.clone(),
+        };
     }
 
     let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
@@ -175,7 +184,9 @@ fn session_update_events(params: &Value) -> Vec<AgentEvent> {
                 .or_else(|| update.get("usage"))
                 .or_else(|| update.get("token_usage"))
             {
-                return vec![AgentEvent::TokenUsage { usage: usage_from(u) }];
+                return vec![AgentEvent::TokenUsage {
+                    usage: usage_from(u),
+                }];
             }
             vec![]
         }
@@ -232,7 +243,14 @@ mod tests {
     fn garbage_never_takes_the_run_down() {
         // A protocol layer that panics on an unexpected frame makes every new agent
         // version a crash instead of a missing feature.
-        for junk in ["", "not json", "[]", "{}", r#"{"jsonrpc":"2.0"}"#, r#"{"method":"who?"}"#] {
+        for junk in [
+            "",
+            "not json",
+            "[]",
+            "{}",
+            r#"{"jsonrpc":"2.0"}"#,
+            r#"{"method":"who?"}"#,
+        ] {
             assert_eq!(parse_incoming(junk), Incoming::Ignored, "{junk:?}");
         }
     }
@@ -243,7 +261,12 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{
                  "sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}"#,
         );
-        assert_eq!(out, Incoming::Events(vec![AgentEvent::TextDelta { text: "hello".into() }]));
+        assert_eq!(
+            out,
+            Incoming::Events(vec![AgentEvent::TextDelta {
+                text: "hello".into()
+            }])
+        );
     }
 
     #[test]
@@ -298,7 +321,9 @@ mod tests {
                  "rawOutput":{"ok":true}}}}"#,
         );
         match done {
-            Incoming::Events(ev) => assert!(matches!(&ev[0], AgentEvent::ToolPost { tool, .. } if tool == "t1")),
+            Incoming::Events(ev) => {
+                assert!(matches!(&ev[0], AgentEvent::ToolPost { tool, .. } if tool == "t1"))
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -363,6 +388,9 @@ mod tests {
         assert!(r.contains("\"method\":\"initialize\""));
 
         let n = notification("session/cancel", json!({"sessionId": "s1"}));
-        assert!(!n.contains("\"id\""), "a notification expects no reply: {n}");
+        assert!(
+            !n.contains("\"id\""),
+            "a notification expects no reply: {n}"
+        );
     }
 }

@@ -75,7 +75,12 @@ fn allow_json() -> String {
 
 pub fn deny(reason: impl Into<String>) -> HookVerdict {
     let reason = reason.into();
-    HookVerdict { allow: false, json: deny_json(&reason), reason, exit_code: 2 }
+    HookVerdict {
+        allow: false,
+        json: deny_json(&reason),
+        reason,
+        exit_code: 2,
+    }
 }
 
 pub fn allow() -> HookVerdict {
@@ -104,7 +109,10 @@ pub fn decide(raw_stdin: &str, guards: &[Guard], fallback_cwd: &str) -> HookVerd
         return deny("AgentRelay received a tool call with no tool name — refused.");
     }
 
-    let cwd = input.cwd.clone().unwrap_or_else(|| fallback_cwd.to_string());
+    let cwd = input
+        .cwd
+        .clone()
+        .unwrap_or_else(|| fallback_cwd.to_string());
     let actions = derive_actions(&input.tool_name, &input.tool_input);
     let decision: GuardDecision = evaluate_guards(&actions, guards, &cwd);
 
@@ -150,10 +158,7 @@ pub fn merge_hook_settings(existing: &Value, command: &str) -> Option<Value> {
     };
 
     let hooks = root.entry("hooks").or_insert_with(|| serde_json::json!({}));
-    let hooks_obj = match hooks.as_object_mut() {
-        Some(o) => o,
-        None => return None, // malformed settings: refuse to rewrite what we can't read
-    };
+    let hooks_obj = hooks.as_object_mut()?;
 
     let pre = hooks_obj
         .entry("PreToolUse")
@@ -164,7 +169,10 @@ pub fn merge_hook_settings(existing: &Value, command: &str) -> Option<Value> {
     if arr.iter().any(|m| {
         m.get("hooks")
             .and_then(|h| h.as_array())
-            .map(|hs| hs.iter().any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command)))
+            .map(|hs| {
+                hs.iter()
+                    .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+            })
             .unwrap_or(false)
     }) {
         return None;
@@ -222,7 +230,8 @@ pub fn remove_hook_settings(existing: &Value, command: &str) -> Value {
                 !m.get("hooks")
                     .and_then(|h| h.as_array())
                     .map(|hs| {
-                        hs.iter().any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+                        hs.iter()
+                            .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
                     })
                     .unwrap_or(false)
             });
@@ -261,7 +270,11 @@ mod tests {
         // Telling the agent not to route around the guard matters as much as the
         // denial: otherwise it tries the next thing that achieves the same effect.
         assert!(v.reason.contains("do not work around it"), "{}", v.reason);
-        assert!(v.json.contains("\"permissionDecision\":\"deny\""), "{}", v.json);
+        assert!(
+            v.json.contains("\"permissionDecision\":\"deny\""),
+            "{}",
+            v.json
+        );
     }
 
     #[test]
@@ -313,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn camelCase_field_names_are_accepted_too() {
+    fn camel_case_field_names_are_accepted_too() {
         // The wire contract is a Phase-0 kill-test; accepting both spellings means a
         // naming difference cannot silently turn every call into a denial.
         let v = decide(
@@ -343,7 +356,10 @@ mod tests {
         assert_eq!(pre[1]["hooks"][0]["command"], "agentrelay hook");
         // Nothing else in their settings is disturbed.
         assert_eq!(merged["model"], "opus");
-        assert_eq!(merged["hooks"]["Stop"][0]["hooks"][0]["command"], "notify-me");
+        assert_eq!(
+            merged["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "notify-me"
+        );
     }
 
     #[test]

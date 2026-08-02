@@ -7,7 +7,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[derive(Parser)]
-#[command(name = "agentrelay", version, about = "Supervise overnight AI coding-agent runs — locally.")]
+#[command(
+    name = "agentrelay",
+    version,
+    about = "Supervise overnight AI coding-agent runs — locally."
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -151,7 +155,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 Some(name) => {
                     // An unknown name is refused with the valid list, before anything
                     // is written.
-                    let t = agentrelay::templates::Template::for_name(&name).map_err(|e| e.to_string())?;
+                    let t = agentrelay::templates::Template::for_name(&name)
+                        .map_err(|e| e.to_string())?;
                     Daemon::init_with_config(root, t.to_config()).map_err(|e| e.to_string())?;
                     if existed {
                         println!(
@@ -188,7 +193,10 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                     "    guards: {} · validators: {} · scope: {} file(s) max · budget: {}",
                     cfg.guards.len(),
                     cfg.validators.len(),
-                    cfg.scope.max_files.map(|n| n.to_string()).unwrap_or_else(|| "no".into()),
+                    cfg.scope
+                        .max_files
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "no".into()),
                     cfg.budget.describe().trim_end_matches('.'),
                 );
                 println!();
@@ -223,9 +231,16 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!("{} Spent so far: ${:.2}.", s.budget, s.spent_usd);
             Ok(())
         }
-        Cmd::Run { prompt, cwd, mission } => {
+        Cmd::Run {
+            prompt,
+            cwd,
+            mission,
+        } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
-            let out = d.run_turn(&mission, &prompt, &cwd).await.map_err(|e| e.to_string())?;
+            let out = d
+                .run_turn(&mission, &prompt, &cwd)
+                .await
+                .map_err(|e| e.to_string())?;
             println!("Turn finished:");
             println!("  events:      {}", out.events_seen);
             println!("  tokens used: {}", out.used_tokens);
@@ -233,11 +248,18 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             if out.interrupted {
                 println!("  INTERRUPTED by a guard:");
                 for v in &out.violations {
-                    println!("    - {} ({})", v.reason_code, v.detail.clone().unwrap_or_default());
+                    println!(
+                        "    - {} ({})",
+                        v.reason_code,
+                        v.detail.clone().unwrap_or_default()
+                    );
                 }
             }
             if let Some(p) = out.resume_plan {
-                println!("  RATE-LIMITED — resume at {} (wait {} ms)", p.resume_at_utc, p.wait_ms);
+                println!(
+                    "  RATE-LIMITED — resume at {} (wait {} ms)",
+                    p.resume_at_utc, p.wait_ms
+                );
             }
             Ok(())
         }
@@ -258,7 +280,9 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             if agentrelay::which::resolve("claude").is_none() {
                 println!();
                 println!("Without `claude` the daemon can supervise nothing — everything else");
-                println!("here (guards, checkpoints, the report) still works, but there is no agent.");
+                println!(
+                    "here (guards, checkpoints, the report) still works, but there is no agent."
+                );
             }
             if missing_required {
                 Err("missing a required tool (git/node)".to_string())
@@ -274,7 +298,12 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 return Ok(());
             }
             for r in &results {
-                println!("  [{}] {} ({} ms)", if r.passed { "PASS" } else { "FAIL" }, r.validator, r.duration_ms);
+                println!(
+                    "  [{}] {} ({} ms)",
+                    if r.passed { "PASS" } else { "FAIL" },
+                    r.validator,
+                    r.duration_ms
+                );
             }
             if agentrelay::validator::all_passed(&results) {
                 println!("All validators passed — unit complete (evidence, not the model's word).");
@@ -364,9 +393,15 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             std::fs::write(&settings_path, serde_json::to_string_pretty(&next).unwrap())
                 .map_err(|e| e.to_string())?;
             if uninstall {
-                println!("Removed the AgentRelay hook from {}.", settings_path.display());
+                println!(
+                    "Removed the AgentRelay hook from {}.",
+                    settings_path.display()
+                );
             } else {
-                println!("Installed the AgentRelay hook in {}.", settings_path.display());
+                println!(
+                    "Installed the AgentRelay hook in {}.",
+                    settings_path.display()
+                );
                 println!("Guards now BLOCK a forbidden tool call before it runs, instead of");
                 println!("stopping the agent after the fact. Your other hooks were left alone.");
             }
@@ -386,8 +421,13 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                     println!("nothing to reason about. Run a turn and the provider will tell us.");
                     Ok(())
                 }
-                StartDecision::WaitUntilReset { resume_at_utc, wait_ms } => {
-                    println!("Wait — a ~{minutes} minute unit would be cut off by the quota window.");
+                StartDecision::WaitUntilReset {
+                    resume_at_utc,
+                    wait_ms,
+                } => {
+                    println!(
+                        "Wait — a ~{minutes} minute unit would be cut off by the quota window."
+                    );
                     println!("  window reopens: {resume_at_utc}");
                     println!("  wait:           {} minute(s)", wait_ms / 60_000);
                     println!();
@@ -403,7 +443,10 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
             // A malformed schedule refuses loudly rather than running through a window
             // the user meant to block.
-            match d.schedule_decision(minutes * 60_000).map_err(|e| e.to_string())? {
+            match d
+                .schedule_decision(minutes * 60_000)
+                .map_err(|e| e.to_string())?
+            {
                 ScheduleDecision::Start => {
                     println!("Go — a ~{minutes} minute unit does not run into any quiet-hours or busy window.");
                     Ok(())
@@ -412,7 +455,10 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                     println!("Go — no schedule is set, so there is nothing to wait for.");
                     Ok(())
                 }
-                ScheduleDecision::WaitUntil { resume_at_utc, wait_ms } => {
+                ScheduleDecision::WaitUntil {
+                    resume_at_utc,
+                    wait_ms,
+                } => {
                     println!("Wait — a ~{minutes} minute unit would collide with a quiet-hours or busy window.");
                     println!("  clears at: {resume_at_utc}");
                     println!("  wait:      {} minute(s)", wait_ms / 60_000);
@@ -426,11 +472,16 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
         }
         Cmd::Begin { cwd, mission, unit } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
-            let existing = d.begin_unit(&mission, &unit, &cwd).map_err(|e| e.to_string())?;
+            let existing = d
+                .begin_unit(&mission, &unit, &cwd)
+                .map_err(|e| e.to_string())?;
             if existing.is_empty() {
                 println!("Tree is clean. Everything the agent changes from here is its own.");
             } else {
-                println!("{} file(s) are already uncommitted and will be left alone:", existing.len());
+                println!(
+                    "{} file(s) are already uncommitted and will be left alone:",
+                    existing.len()
+                );
                 for p in existing.iter().take(10) {
                     println!("  {p}");
                 }
@@ -442,7 +493,12 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Done { summary, cwd, mission, unit } => {
+        Cmd::Done {
+            summary,
+            cwd,
+            mission,
+            unit,
+        } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
             let out = d.complete_unit(&mission, &unit, &cwd, &summary).await;
 
@@ -452,30 +508,64 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 return Err("no completion evidence — unit is NOT complete".to_string());
             }
             for r in &out.validations {
-                println!("  [{}] {} ({} ms)", if r.passed { "PASS" } else { "FAIL" }, r.validator, r.duration_ms);
+                println!(
+                    "  [{}] {} ({} ms)",
+                    if r.passed { "PASS" } else { "FAIL" },
+                    r.validator,
+                    r.duration_ms
+                );
             }
             if !out.gate_passed {
-                println!("\nNot checkpointed — your work is still in the working tree, uncommitted.");
+                println!(
+                    "\nNot checkpointed — your work is still in the working tree, uncommitted."
+                );
                 return Err("validators failed — unit is NOT complete".to_string());
             }
             match (&out.checkpoint, &out.checkpoint_error) {
                 (Some(cp), _) if cp.created => {
-                    println!("\nCheckpointed {} ({} file(s)) on {}", &cp.head[..7.min(cp.head.len())], cp.files_changed, cp.branch.clone().unwrap_or_else(|| "detached HEAD".into()));
+                    println!(
+                        "\nCheckpointed {} ({} file(s)) on {}",
+                        &cp.head[..7.min(cp.head.len())],
+                        cp.files_changed,
+                        cp.branch.clone().unwrap_or_else(|| "detached HEAD".into())
+                    );
                     if !out.left_alone.is_empty() {
-                        println!("  Left alone ({} file(s) you had already changed): {}",
+                        println!(
+                            "  Left alone ({} file(s) you had already changed): {}",
                             out.left_alone.len(),
-                            out.left_alone.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
+                            out.left_alone
+                                .iter()
+                                .take(5)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                     }
-                    println!("  Undo this unit:   {}", agentrelay::checkpoint::undo_command(&cp.head));
-                    println!("  Rewind here later: {}", agentrelay::checkpoint::rewind_command(&cp.head));
+                    println!(
+                        "  Undo this unit:   {}",
+                        agentrelay::checkpoint::undo_command(&cp.head)
+                    );
+                    println!(
+                        "  Rewind here later: {}",
+                        agentrelay::checkpoint::rewind_command(&cp.head)
+                    );
                 }
-                (Some(_), _) => println!("\nValidators passed; nothing to checkpoint (the tree was already clean)."),
-                (None, Some(e)) => println!("\nValidators passed, but the checkpoint could not be made: {e}"),
+                (Some(_), _) => println!(
+                    "\nValidators passed; nothing to checkpoint (the tree was already clean)."
+                ),
+                (None, Some(e)) => {
+                    println!("\nValidators passed, but the checkpoint could not be made: {e}")
+                }
                 (None, None) => {}
             }
             Ok(())
         }
-        Cmd::Report { cwd, mission, short, notify } => {
+        Cmd::Report {
+            cwd,
+            mission,
+            short,
+            notify,
+        } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
             let r = d.morning_report(&mission, &cwd);
             if short {
@@ -493,7 +583,9 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                     // Report the delivery failure, but never let it decide the exit
                     // code: whether the night succeeded has nothing to do with
                     // whether a phone server answered.
-                    Err(e) => eprintln!("\nnotification failed (the report above still stands): {e}"),
+                    Err(e) => {
+                        eprintln!("\nnotification failed (the report above still stands): {e}")
+                    }
                 }
             }
 
@@ -540,26 +632,21 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
         Cmd::Serve { bind } => {
             let daemon = Daemon::open(root).map_err(|e| e.to_string())?;
             let shared = Arc::new(Mutex::new(daemon));
-            let handle = agentrelay::ipc::serve(shared, &bind).await.map_err(|e| e.to_string())?;
+            let handle = agentrelay::ipc::serve(shared, &bind)
+                .await
+                .map_err(|e| e.to_string())?;
             // Write addr + token so a local UI can connect (loopback only).
-            let info = format!("{{\"addr\":\"{}\",\"token\":\"{}\"}}", handle.addr, handle.token);
+            let info = format!(
+                "{{\"addr\":\"{}\",\"token\":\"{}\"}}",
+                handle.addr, handle.token
+            );
             let _ = std::fs::write(root.join(".agentrelay").join("ipc.json"), &info);
             println!("AgentRelay IPC listening on http://{}", handle.addr);
-            println!("  token written to .agentrelay/ipc.json — GET /status, POST /run, GET /health");
+            println!(
+                "  token written to .agentrelay/ipc.json — GET /status, POST /run, GET /health"
+            );
             let _ = handle.task.await;
             Ok(())
         }
     }
-}
-
-/// Best-effort "is this program runnable?" — try `<tool> --version`.
-fn which(tool: &str) -> bool {
-    std::process::Command::new(tool)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }

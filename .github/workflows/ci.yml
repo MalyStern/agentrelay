@@ -1,20 +1,110 @@
 name: CI
 
+# The core is the Rust daemon. The previous workflow only ran the Node `runner`, so
+# "the daemon's tests pass" was a local claim, not a gate on every commit. This runs
+# the real product — the daemon's tests, clippy (warnings are errors), and formatting,
+# plus the desktop-app build — on all three OSes, because AgentRelay's whole point is
+# behaving the same on the machine you actually leave running overnight.
+
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  runner:
-    name: runner (${{ matrix.os }}, node ${{ matrix.node }})
+  daemon:
+    name: daemon (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # node:sqlite is used by the store; needs Node 22.5+ (unflagged on 24).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+      # Several daemon tests spawn a real `node` subprocess as a stand-in agent, and
+      # the integration tests shell out to git (present on all runners).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: formatting
+        working-directory: daemon
+        run: cargo fmt --check
+      - name: clippy (warnings are errors)
+        working-directory: daemon
+        run: cargo clippy --all-targets -- -D warnings
+      - name: tests
+        working-directory: daemon
+        run: cargo test
+
+  app:
+    name: desktop app build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+      - name: build
+        working-directory: app/src-tauri
+        run: cargo build
+
+  plugin:
+    name: plugin (parse + json)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: the plugin's Node scripts parse
+        run: |
+          node --check plugin/bin/guard.mjs
+          node --check plugin/bin/session-check.mjs
+          node --check plugin/mcp/server.mjs
+      - name: every plugin JSON is valid
+        run: |
+          for f in .claude-plugin/marketplace.json plugin/.claude-plugin/plugin.json plugin/.mcp.json plugin/hooks/hooks.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8')); console.log('ok $f')"
+          done
+
+  i18n:
+    name: i18n catalogue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: validate the message catalogue (keys, interpolation, bidi, plurals)
+        working-directory: i18n
+        run: node check.mjs
+
+  runner:
+    name: runner (executable spec, node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # node:sqlite needs Node 22.5+ (unflagged on 24).
         node: [22, 24]
     defaults:
       run:

@@ -74,7 +74,10 @@ impl MissionState {
     /// Nothing leaves a terminal state. A mission that finished — however it
     /// finished — stays finished.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, MissionState::Done | MissionState::Failed | MissionState::Stopped)
+        matches!(
+            self,
+            MissionState::Done | MissionState::Failed | MissionState::Stopped
+        )
     }
 
     /// Will this state continue on its own, or is it waiting for a person?
@@ -88,7 +91,10 @@ impl MissionState {
     /// and needs nobody. Telling the user to act when the answer is "wait a moment"
     /// trains them to ignore the message.
     pub fn needs_a_person(&self) -> bool {
-        matches!(self, MissionState::Draft | MissionState::WaitingInput | MissionState::Paused)
+        matches!(
+            self,
+            MissionState::Draft | MissionState::WaitingInput | MissionState::Paused
+        )
     }
 
     /// What a person reading `status` needs to know.
@@ -96,7 +102,9 @@ impl MissionState {
         match self {
             MissionState::Draft => "not started yet",
             MissionState::Running => "working",
-            MissionState::WaitingInput => "STOPPED, waiting for you — it will not continue by itself",
+            MissionState::WaitingInput => {
+                "STOPPED, waiting for you — it will not continue by itself"
+            }
             MissionState::RateLimited => "out of quota; will resume when the window reopens",
             MissionState::Paused => "paused by you; resume when ready",
             MissionState::Stopping => "stopping — killing processes and writing the final state",
@@ -122,7 +130,11 @@ pub struct IllegalTransition {
 
 impl fmt::Display for IllegalTransition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cannot go from {} to {}: {}", self.from, self.to, self.why)
+        write!(
+            f,
+            "cannot go from {} to {}: {}",
+            self.from, self.to, self.why
+        )
     }
 }
 
@@ -169,7 +181,9 @@ pub fn check(from: MissionState, to: MissionState) -> Result<(), IllegalTransiti
     let why = match (from, to) {
         (Stopping, _) => "a stop in progress can only finish, not turn into something else".into(),
         (_, Draft) => "a mission cannot go back to being unstarted".into(),
-        (_, Stopped) => "reach `stopped` through `stopping`, so processes are actually killed first".into(),
+        (_, Stopped) => {
+            "reach `stopped` through `stopping`, so processes are actually killed first".into()
+        }
         _ => format!("{to} is not reachable from {from}"),
     };
     Err(IllegalTransition { from, to, why })
@@ -181,7 +195,10 @@ pub fn check(from: MissionState, to: MissionState) -> Result<(), IllegalTransiti
 /// else has been working in this repo. Continuing would mean building on top of
 /// changes the agent has never seen and the human never mentioned — so the
 /// supervisor stops and asks rather than guessing.
-pub fn state_for_foreign_head(head_is_ours: bool, head_changed_since_checkpoint: bool) -> MissionState {
+pub fn state_for_foreign_head(
+    head_is_ours: bool,
+    head_changed_since_checkpoint: bool,
+) -> MissionState {
     if head_changed_since_checkpoint && !head_is_ours {
         MissionState::WaitingInput
     } else {
@@ -232,7 +249,10 @@ mod tests {
     #[test]
     fn a_stop_in_progress_cannot_become_something_else() {
         for to in [Running, Paused, RateLimited, WaitingInput, Done] {
-            assert!(check(Stopping, to).is_err(), "stopping -> {to} must be refused");
+            assert!(
+                check(Stopping, to).is_err(),
+                "stopping -> {to} must be refused"
+            );
         }
     }
 
@@ -240,14 +260,25 @@ mod tests {
     fn nothing_goes_back_to_draft() {
         for from in [Running, Paused, RateLimited, WaitingInput] {
             let err = check(from, Draft).unwrap_err();
-            assert!(err.why.contains("cannot go back to being unstarted"), "{err}");
+            assert!(
+                err.why.contains("cannot go back to being unstarted"),
+                "{err}"
+            );
         }
     }
 
     #[test]
     fn re_declaring_the_same_state_is_not_an_error() {
         // A crash-restart that says "running" again is normal, not a bug.
-        for s in [Draft, Running, RateLimited, WaitingInput, Paused, Stopping, Done] {
+        for s in [
+            Draft,
+            Running,
+            RateLimited,
+            WaitingInput,
+            Paused,
+            Stopping,
+            Done,
+        ] {
             assert!(check(s, s).is_ok(), "{s} -> {s}");
         }
     }
@@ -273,9 +304,14 @@ mod tests {
         // continue on its own, or is it sitting there until someone looks?
         assert!(!WaitingInput.resumes_itself());
         assert!(!Paused.resumes_itself());
-        assert!(RateLimited.resumes_itself(), "a quota wait continues by itself");
+        assert!(
+            RateLimited.resumes_itself(),
+            "a quota wait continues by itself"
+        );
         assert!(Running.resumes_itself());
-        assert!(WaitingInput.describe().contains("will not continue by itself"));
+        assert!(WaitingInput
+            .describe()
+            .contains("will not continue by itself"));
     }
 
     #[test]
@@ -291,7 +327,17 @@ mod tests {
 
     #[test]
     fn states_survive_a_round_trip_through_the_database() {
-        for s in [Draft, Running, WaitingInput, RateLimited, Paused, Stopping, Done, Failed, Stopped] {
+        for s in [
+            Draft,
+            Running,
+            WaitingInput,
+            RateLimited,
+            Paused,
+            Stopping,
+            Done,
+            Failed,
+            Stopped,
+        ] {
             assert_eq!(MissionState::parse(s.as_str()), Some(s), "{s}");
         }
         assert_eq!(MissionState::parse("nonsense"), None);

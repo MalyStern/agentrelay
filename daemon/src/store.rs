@@ -139,7 +139,10 @@ impl Store {
         Self::with_clock(Connection::open(path)?, Box::new(now_iso))
     }
 
-    pub fn with_clock(conn: Connection, clock: Box<dyn Fn() -> String + Send + Sync>) -> rusqlite::Result<Self> {
+    pub fn with_clock(
+        conn: Connection,
+        clock: Box<dyn Fn() -> String + Send + Sync>,
+    ) -> rusqlite::Result<Self> {
         let store = Store {
             conn: std::sync::Mutex::new(conn),
             clock,
@@ -162,9 +165,11 @@ impl Store {
         self.conn
             .lock()
             .unwrap()
-            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
-                r.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0)
@@ -239,10 +244,14 @@ impl Store {
             .ok()
     }
 
-    pub fn get_transitions(&self, mission_id: &str) -> rusqlite::Result<Vec<(Option<String>, String)>> {
+    pub fn get_transitions(
+        &self,
+        mission_id: &str,
+    ) -> rusqlite::Result<Vec<(Option<String>, String)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT from_state, to_state FROM state_transitions WHERE mission_id = ?1 ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT from_state, to_state FROM state_transitions WHERE mission_id = ?1 ORDER BY id",
+        )?;
         let rows = stmt.query_map(params![mission_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect()
     }
@@ -327,7 +336,14 @@ impl Store {
         self.conn.lock().unwrap().execute(
             "INSERT INTO checkpoints(id, mission_id, ts_utc, git_head, git_branch, summary)
              VALUES (?1,?2,?3,?4,?5,?6)",
-            params![cp.id, cp.mission_id, (self.clock)(), cp.git_head, cp.git_branch, cp.summary],
+            params![
+                cp.id,
+                cp.mission_id,
+                (self.clock)(),
+                cp.git_head,
+                cp.git_branch,
+                cp.summary
+            ],
         )?;
         Ok(())
     }
@@ -358,7 +374,11 @@ impl Store {
 
     /// Upsert on (mission, path): only the newest content per file matters, and
     /// keeping history here would grow without bound for no benefit.
-    pub fn save_receipt(&self, mission_id: &str, r: &crate::context::FileReceipt) -> rusqlite::Result<()> {
+    pub fn save_receipt(
+        &self,
+        mission_id: &str,
+        r: &crate::context::FileReceipt,
+    ) -> rusqlite::Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO file_receipts(mission_id, path, hash, bytes, turn, ts_utc)
              VALUES (?1,?2,?3,?4,?5,?6)
@@ -470,7 +490,12 @@ impl Store {
 
     /// Remember which paths were already dirty when a unit started — the user's own
     /// uncommitted work, which the supervisor must never commit on their behalf.
-    pub fn save_unit_baseline(&self, mission_id: &str, unit_id: &str, paths: &[String]) -> rusqlite::Result<()> {
+    pub fn save_unit_baseline(
+        &self,
+        mission_id: &str,
+        unit_id: &str,
+        paths: &[String],
+    ) -> rusqlite::Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO meta(key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -520,7 +545,10 @@ impl Store {
         }
     }
 
-    pub fn get_receipts(&self, mission_id: &str) -> rusqlite::Result<Vec<crate::context::FileReceipt>> {
+    pub fn get_receipts(
+        &self,
+        mission_id: &str,
+    ) -> rusqlite::Result<Vec<crate::context::FileReceipt>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT path, hash, bytes, turn FROM file_receipts WHERE mission_id = ?1 ORDER BY path",
@@ -537,11 +565,22 @@ impl Store {
     }
 
     // ── validations (Watchtower layer-2 evidence) ─────────────────────────────
-    pub fn save_validation(&self, work_unit_id: &str, r: &ValidationResult) -> rusqlite::Result<()> {
+    pub fn save_validation(
+        &self,
+        work_unit_id: &str,
+        r: &ValidationResult,
+    ) -> rusqlite::Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO validations(work_unit_id, ts_utc, validator, passed, output, duration_ms)
              VALUES (?1,?2,?3,?4,?5,?6)",
-            params![work_unit_id, (self.clock)(), r.validator, r.passed as i64, r.output, r.duration_ms as i64],
+            params![
+                work_unit_id,
+                (self.clock)(),
+                r.validator,
+                r.passed as i64,
+                r.output,
+                r.duration_ms as i64
+            ],
         )?;
         Ok(())
     }
@@ -587,11 +626,35 @@ mod tests {
     #[test]
     fn append_log_is_ordered_with_json_payloads() {
         let s = store_with_counter_clock();
-        s.append_event(&AppendEvent { mission_id: Some("m1".into()), actor: "system".into(), kind: "mission.created".into(), payload: json!({"title":"X"}), seq_in_turn: None }).unwrap();
-        s.append_event(&AppendEvent { mission_id: Some("m1".into()), actor: "claude".into(), kind: "tool.pre".into(), payload: json!({"tool":"Bash"}), seq_in_turn: Some(0) }).unwrap();
-        s.append_event(&AppendEvent { mission_id: Some("m2".into()), actor: "system".into(), kind: "mission.created".into(), payload: json!({}), seq_in_turn: None }).unwrap();
+        s.append_event(&AppendEvent {
+            mission_id: Some("m1".into()),
+            actor: "system".into(),
+            kind: "mission.created".into(),
+            payload: json!({"title":"X"}),
+            seq_in_turn: None,
+        })
+        .unwrap();
+        s.append_event(&AppendEvent {
+            mission_id: Some("m1".into()),
+            actor: "claude".into(),
+            kind: "tool.pre".into(),
+            payload: json!({"tool":"Bash"}),
+            seq_in_turn: Some(0),
+        })
+        .unwrap();
+        s.append_event(&AppendEvent {
+            mission_id: Some("m2".into()),
+            actor: "system".into(),
+            kind: "mission.created".into(),
+            payload: json!({}),
+            seq_in_turn: None,
+        })
+        .unwrap();
         let evs = s.get_events("m1").unwrap();
-        assert_eq!(evs.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["mission.created", "tool.pre"]);
+        assert_eq!(
+            evs.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+            ["mission.created", "tool.pre"]
+        );
         assert_eq!(evs[0].payload, json!({"title":"X"}));
         assert_eq!(evs[1].seq_in_turn, Some(0));
         assert!(evs[0].id < evs[1].id);
@@ -602,18 +665,44 @@ mod tests {
     fn transitions_history() {
         let s = store_with_counter_clock();
         s.record_transition("m1", None, "planned", None).unwrap();
-        s.record_transition("m1", Some("planned"), "running", None).unwrap();
-        s.record_transition("m1", Some("running"), "waiting_quota", Some("quota.rate_limited")).unwrap();
+        s.record_transition("m1", Some("planned"), "running", None)
+            .unwrap();
+        s.record_transition(
+            "m1",
+            Some("running"),
+            "waiting_quota",
+            Some("quota.rate_limited"),
+        )
+        .unwrap();
         let t = s.get_transitions("m1").unwrap();
-        assert_eq!(t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), ["planned", "running", "waiting_quota"]);
+        assert_eq!(
+            t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(),
+            ["planned", "running", "waiting_quota"]
+        );
     }
 
     #[test]
     fn mission_upsert() {
         let s = store_with_counter_clock();
-        s.upsert_mission(&MissionRow { id: "m1".into(), title: "Nightly".into(), contract: json!({"goal":"x"}), status: "planned".into(), autonomy: "overnight".into(), timezone: None }).unwrap();
+        s.upsert_mission(&MissionRow {
+            id: "m1".into(),
+            title: "Nightly".into(),
+            contract: json!({"goal":"x"}),
+            status: "planned".into(),
+            autonomy: "overnight".into(),
+            timezone: None,
+        })
+        .unwrap();
         assert_eq!(s.get_mission("m1").unwrap().unwrap().status, "planned");
-        s.upsert_mission(&MissionRow { id: "m1".into(), title: "Nightly".into(), contract: json!({"goal":"x"}), status: "running".into(), autonomy: "overnight".into(), timezone: None }).unwrap();
+        s.upsert_mission(&MissionRow {
+            id: "m1".into(),
+            title: "Nightly".into(),
+            contract: json!({"goal":"x"}),
+            status: "running".into(),
+            autonomy: "overnight".into(),
+            timezone: None,
+        })
+        .unwrap();
         assert_eq!(s.get_mission("m1").unwrap().unwrap().status, "running");
         assert_eq!(s.count_missions().unwrap(), 1);
     }
@@ -621,10 +710,33 @@ mod tests {
     #[test]
     fn work_units_ordered() {
         let s = store_with_counter_clock();
-        s.upsert_work_unit(&WorkUnitRow { id: "w2".into(), mission_id: "m1".into(), seq: Some(2), title: None, contract: json!({}), worker: None, status: Some("pending".into()), worktree_path: None }).unwrap();
-        s.upsert_work_unit(&WorkUnitRow { id: "w1".into(), mission_id: "m1".into(), seq: Some(1), title: None, contract: json!({}), worker: Some("codex".into()), status: Some("running".into()), worktree_path: Some("/wt/1".into()) }).unwrap();
+        s.upsert_work_unit(&WorkUnitRow {
+            id: "w2".into(),
+            mission_id: "m1".into(),
+            seq: Some(2),
+            title: None,
+            contract: json!({}),
+            worker: None,
+            status: Some("pending".into()),
+            worktree_path: None,
+        })
+        .unwrap();
+        s.upsert_work_unit(&WorkUnitRow {
+            id: "w1".into(),
+            mission_id: "m1".into(),
+            seq: Some(1),
+            title: None,
+            contract: json!({}),
+            worker: Some("codex".into()),
+            status: Some("running".into()),
+            worktree_path: Some("/wt/1".into()),
+        })
+        .unwrap();
         let units = s.list_work_units("m1").unwrap();
-        assert_eq!(units.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(), ["w1", "w2"]);
+        assert_eq!(
+            units.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),
+            ["w1", "w2"]
+        );
         assert_eq!(units[0].worker.as_deref(), Some("codex"));
         assert_eq!(units[1].worker, None);
     }
@@ -632,8 +744,22 @@ mod tests {
     #[test]
     fn latest_checkpoint_by_time() {
         let s = store_with_counter_clock();
-        s.save_checkpoint(&CheckpointRow { id: "cp1".into(), mission_id: Some("m1".into()), git_head: Some("aaa".into()), git_branch: None, summary: Some("did A".into()) }).unwrap();
-        s.save_checkpoint(&CheckpointRow { id: "cp2".into(), mission_id: Some("m1".into()), git_head: Some("bbb".into()), git_branch: None, summary: Some("did B".into()) }).unwrap();
+        s.save_checkpoint(&CheckpointRow {
+            id: "cp1".into(),
+            mission_id: Some("m1".into()),
+            git_head: Some("aaa".into()),
+            git_branch: None,
+            summary: Some("did A".into()),
+        })
+        .unwrap();
+        s.save_checkpoint(&CheckpointRow {
+            id: "cp2".into(),
+            mission_id: Some("m1".into()),
+            git_head: Some("bbb".into()),
+            git_branch: None,
+            summary: Some("did B".into()),
+        })
+        .unwrap();
         assert_eq!(s.latest_checkpoint("m1").unwrap().unwrap().id, "cp2");
         assert!(s.latest_checkpoint("nope").unwrap().is_none());
     }

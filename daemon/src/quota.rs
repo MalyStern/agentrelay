@@ -25,8 +25,13 @@ fn to_iso(ms: i64) -> String {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuotaSignal {
-    Usage { used: u64 },
-    RateLimited { reset_at: String, window: QuotaWindow },
+    Usage {
+        used: u64,
+    },
+    RateLimited {
+        reset_at: String,
+        window: QuotaWindow,
+    },
 }
 
 pub fn interpret_event(event: &AgentEvent) -> Option<QuotaSignal> {
@@ -34,7 +39,9 @@ pub fn interpret_event(event: &AgentEvent) -> Option<QuotaSignal> {
         AgentEvent::TokenUsage { usage } | AgentEvent::TurnCompleted { usage } => {
             Some(QuotaSignal::Usage { used: usage.used() })
         }
-        AgentEvent::RateLimited { reset_at, window, .. } => Some(QuotaSignal::RateLimited {
+        AgentEvent::RateLimited {
+            reset_at, window, ..
+        } => Some(QuotaSignal::RateLimited {
             reset_at: reset_at.clone(),
             window: window.unwrap_or(QuotaWindow::FiveHour),
         }),
@@ -59,7 +66,8 @@ pub fn plan_resume_after_rate_limit(
 ) -> ResumePlan {
     let buffer_ms = buffer_ms.unwrap_or(60_000);
     let now = to_ms(now_utc).unwrap_or(0);
-    let reset = to_ms(reset_at_utc).unwrap_or_else(|| now + fallback_ms.unwrap_or(DEFAULT_RESET_MS));
+    let reset =
+        to_ms(reset_at_utc).unwrap_or_else(|| now + fallback_ms.unwrap_or(DEFAULT_RESET_MS));
     let resume_at = reset + buffer_ms;
     ResumePlan {
         resume_at_utc: to_iso(resume_at),
@@ -132,7 +140,8 @@ pub fn session_verify_deadline(
 ) -> VerifyDeadline {
     let lead_ms = lead_ms.unwrap_or(5 * 60_000);
     let now = to_ms(now_utc).unwrap_or(0);
-    let reset = to_ms(reset_at_utc).unwrap_or_else(|| now + fallback_ms.unwrap_or(DEFAULT_RESET_MS));
+    let reset =
+        to_ms(reset_at_utc).unwrap_or_else(|| now + fallback_ms.unwrap_or(DEFAULT_RESET_MS));
     let verify_by = reset - lead_ms;
     VerifyDeadline {
         verify_by_utc: to_iso(verify_by),
@@ -172,11 +181,14 @@ impl QuotaTracker {
         let sig = interpret_event(event)?;
         match &sig {
             QuotaSignal::Usage { used } => {
-                let w = self.windows.entry(QuotaWindow::FiveHour).or_insert(WindowSnapshot {
-                    kind: QuotaWindow::FiveHour,
-                    used: Some(0),
-                    reset_at_utc: None,
-                });
+                let w = self
+                    .windows
+                    .entry(QuotaWindow::FiveHour)
+                    .or_insert(WindowSnapshot {
+                        kind: QuotaWindow::FiveHour,
+                        used: Some(0),
+                        reset_at_utc: None,
+                    });
                 w.used = Some(w.used.unwrap_or(0) + used);
             }
             QuotaSignal::RateLimited { reset_at, window } => {
@@ -222,7 +234,12 @@ mod tests {
     #[test]
     fn a_unit_that_fits_in_the_window_starts() {
         assert_eq!(
-            decide_start(Some("2026-08-02T04:00:00Z"), "2026-08-02T01:00:00Z", HOUR, None),
+            decide_start(
+                Some("2026-08-02T04:00:00Z"),
+                "2026-08-02T01:00:00Z",
+                HOUR,
+                None
+            ),
             StartDecision::Start,
             "three hours left, one hour of work"
         );
@@ -233,9 +250,20 @@ mod tests {
         // The expensive failure: work stopped mid-unit is unvalidated and
         // uncheckpointed, and resuming means rebuilding context a fresh session
         // does not have. Waiting twenty minutes beats that.
-        match decide_start(Some("2026-08-02T04:00:00Z"), "2026-08-02T03:40:00Z", HOUR, None) {
-            StartDecision::WaitUntilReset { resume_at_utc, wait_ms } => {
-                assert!(resume_at_utc.starts_with("2026-08-02T04:01"), "{resume_at_utc}");
+        match decide_start(
+            Some("2026-08-02T04:00:00Z"),
+            "2026-08-02T03:40:00Z",
+            HOUR,
+            None,
+        ) {
+            StartDecision::WaitUntilReset {
+                resume_at_utc,
+                wait_ms,
+            } => {
+                assert!(
+                    resume_at_utc.starts_with("2026-08-02T04:01"),
+                    "{resume_at_utc}"
+                );
                 assert!(wait_ms > 20 * 60_000 && wait_ms < 22 * 60_000, "{wait_ms}");
             }
             other => panic!("expected a wait, got {other:?}"),
@@ -245,7 +273,12 @@ mod tests {
     #[test]
     fn a_window_that_has_already_reopened_is_not_waited_for() {
         assert_eq!(
-            decide_start(Some("2026-08-02T01:00:00Z"), "2026-08-02T03:00:00Z", HOUR, None),
+            decide_start(
+                Some("2026-08-02T01:00:00Z"),
+                "2026-08-02T03:00:00Z",
+                HOUR,
+                None
+            ),
             StartDecision::Start
         );
     }
@@ -267,7 +300,9 @@ mod tests {
     #[test]
     fn interpret() {
         assert_eq!(
-            interpret_event(&AgentEvent::TokenUsage { usage: usage(100, 40) }),
+            interpret_event(&AgentEvent::TokenUsage {
+                usage: usage(100, 40)
+            }),
             Some(QuotaSignal::Usage { used: 140 })
         );
         assert_eq!(
@@ -286,43 +321,75 @@ mod tests {
 
     #[test]
     fn plan_resume_waits_until_reset_plus_buffer() {
-        let p = plan_resume_after_rate_limit("2026-07-27T22:00:00.000Z", "2026-07-27T21:00:00.000Z", Some(60_000), None);
+        let p = plan_resume_after_rate_limit(
+            "2026-07-27T22:00:00.000Z",
+            "2026-07-27T21:00:00.000Z",
+            Some(60_000),
+            None,
+        );
         assert_eq!(p.wait_ms, 61 * 60_000);
         assert_eq!(p.resume_at_utc, "2026-07-27T22:01:00.000Z");
     }
 
     #[test]
     fn plan_resume_never_negative() {
-        let p = plan_resume_after_rate_limit("2026-07-27T20:00:00.000Z", "2026-07-27T21:00:00.000Z", None, None);
+        let p = plan_resume_after_rate_limit(
+            "2026-07-27T20:00:00.000Z",
+            "2026-07-27T21:00:00.000Z",
+            None,
+            None,
+        );
         assert_eq!(p.wait_ms, 0);
     }
 
     #[test]
     fn plan_resume_falls_back_on_malformed_reset() {
-        let p = plan_resume_after_rate_limit("not-a-date", "2026-07-27T21:00:00.000Z", None, Some(3_600_000));
+        let p = plan_resume_after_rate_limit(
+            "not-a-date",
+            "2026-07-27T21:00:00.000Z",
+            None,
+            Some(3_600_000),
+        );
         assert_eq!(p.wait_ms, 3_600_000 + 60_000);
         assert!(!p.resume_at_utc.is_empty());
     }
 
     #[test]
     fn verify_deadline_before_window() {
-        let d = session_verify_deadline("2026-07-27T22:00:00.000Z", "2026-07-27T21:00:00.000Z", Some(5 * 60_000), None);
+        let d = session_verify_deadline(
+            "2026-07-27T22:00:00.000Z",
+            "2026-07-27T21:00:00.000Z",
+            Some(5 * 60_000),
+            None,
+        );
         assert_eq!(d.verify_by_utc, "2026-07-27T21:55:00.000Z");
         assert!(!d.verify_now);
-        let d2 = session_verify_deadline("2026-07-27T22:00:00.000Z", "2026-07-27T21:58:00.000Z", Some(5 * 60_000), None);
+        let d2 = session_verify_deadline(
+            "2026-07-27T22:00:00.000Z",
+            "2026-07-27T21:58:00.000Z",
+            Some(5 * 60_000),
+            None,
+        );
         assert!(d2.verify_now);
     }
 
     #[test]
     fn first_turn_is_read_only() {
-        assert_eq!(first_turn_read_only_guards(), vec![Guard::new(GuardKind::ReadOnly)]);
+        assert_eq!(
+            first_turn_read_only_guards(),
+            vec![Guard::new(GuardKind::ReadOnly)]
+        );
     }
 
     #[test]
     fn tracker_accumulates_and_records_reset() {
         let mut t = QuotaTracker::new("claude");
-        t.ingest(&AgentEvent::TokenUsage { usage: usage(100, 40) });
-        t.ingest(&AgentEvent::TurnCompleted { usage: usage(100, 40) });
+        t.ingest(&AgentEvent::TokenUsage {
+            usage: usage(100, 40),
+        });
+        t.ingest(&AgentEvent::TurnCompleted {
+            usage: usage(100, 40),
+        });
         t.ingest(&AgentEvent::RateLimited {
             reset_at: "2026-07-27T22:00:00Z".into(),
             window: Some(QuotaWindow::Weekly),
@@ -330,7 +397,10 @@ mod tests {
         });
         assert_eq!(t.window(QuotaWindow::FiveHour).unwrap().used, Some(280));
         assert_eq!(
-            t.window(QuotaWindow::Weekly).unwrap().reset_at_utc.as_deref(),
+            t.window(QuotaWindow::Weekly)
+                .unwrap()
+                .reset_at_utc
+                .as_deref(),
             Some("2026-07-27T22:00:00Z")
         );
     }

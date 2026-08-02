@@ -46,8 +46,7 @@ impl Budget {
     pub fn describe(&self) -> String {
         match (self.mission_usd, self.turn_usd) {
             (None, None) => {
-                "No spending cap is set. AgentRelay will not stop the run on cost."
-                    .to_string()
+                "No spending cap is set. AgentRelay will not stop the run on cost.".to_string()
             }
             (Some(m), None) => format!("Spending cap: ${m:.2} for this mission."),
             (None, Some(t)) => format!("Spending cap: ${t:.2} per turn."),
@@ -61,9 +60,16 @@ impl Budget {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BudgetVerdict {
     /// Room to run.
-    Proceed { spent_usd: f64, remaining_usd: Option<f64> },
+    Proceed {
+        spent_usd: f64,
+        remaining_usd: Option<f64>,
+    },
     /// The cap is reached. The run stops here.
-    Stop { spent_usd: f64, cap_usd: f64, reason: String },
+    Stop {
+        spent_usd: f64,
+        cap_usd: f64,
+        reason: String,
+    },
 }
 
 impl BudgetVerdict {
@@ -95,7 +101,10 @@ pub fn check_before_turn(
         }
     }
     let Some(cap) = budget.mission_usd else {
-        return BudgetVerdict::Proceed { spent_usd, remaining_usd: None };
+        return BudgetVerdict::Proceed {
+            spent_usd,
+            remaining_usd: None,
+        };
     };
     if spent_usd >= cap {
         return BudgetVerdict::Stop {
@@ -116,7 +125,10 @@ pub fn check_before_turn(
             ),
         };
     }
-    BudgetVerdict::Proceed { spent_usd, remaining_usd: Some(cap - spent_usd) }
+    BudgetVerdict::Proceed {
+        spent_usd,
+        remaining_usd: Some(cap - spent_usd),
+    }
 }
 
 /// Pull the charged amount out of a provider `result` event.
@@ -167,11 +179,18 @@ mod tests {
 
     #[test]
     fn the_cap_is_enforced_before_the_turn_that_would_cross_it() {
-        let b = Budget { mission_usd: Some(10.0), turn_usd: None };
+        let b = Budget {
+            mission_usd: Some(10.0),
+            turn_usd: None,
+        };
         // $9.50 spent, a turn that might cost $1 — that crosses $10, so it does not
         // start. Checking afterwards would just tell us we are at $10.50.
         match check_before_turn(&b, 9.50, 1.00) {
-            BudgetVerdict::Stop { reason, cap_usd, spent_usd } => {
+            BudgetVerdict::Stop {
+                reason,
+                cap_usd,
+                spent_usd,
+            } => {
                 assert_eq!(cap_usd, 10.0);
                 assert_eq!(spent_usd, 9.50);
                 assert!(reason.contains("would pass"), "{reason}");
@@ -191,23 +210,35 @@ mod tests {
     fn a_single_runaway_turn_is_caught_by_the_per_turn_cap() {
         // Slow drift is caught by the mission cap; one enormous turn is not, and it
         // is the one that happens while you are asleep.
-        let b = Budget { mission_usd: Some(100.0), turn_usd: Some(2.0) };
+        let b = Budget {
+            mission_usd: Some(100.0),
+            turn_usd: Some(2.0),
+        };
         assert!(!check_before_turn(&b, 1.0, 5.0).may_proceed());
         assert!(check_before_turn(&b, 1.0, 0.5).may_proceed());
     }
 
     #[test]
     fn being_exactly_at_the_cap_stops() {
-        let b = Budget { mission_usd: Some(5.0), turn_usd: None };
+        let b = Budget {
+            mission_usd: Some(5.0),
+            turn_usd: None,
+        };
         assert!(!check_before_turn(&b, 5.0, 0.0).may_proceed());
     }
 
     #[test]
     fn the_budget_survives_a_round_trip_through_config_json() {
-        let b = Budget { mission_usd: Some(12.5), turn_usd: Some(1.0) };
+        let b = Budget {
+            mission_usd: Some(12.5),
+            turn_usd: Some(1.0),
+        };
         let json = serde_json::to_string(&b).unwrap();
         assert_eq!(serde_json::from_str::<Budget>(&json).unwrap(), b);
         // And an absent budget parses as no limit rather than failing.
-        assert_eq!(serde_json::from_str::<Budget>("{}").unwrap(), Budget::default());
+        assert_eq!(
+            serde_json::from_str::<Budget>("{}").unwrap(),
+            Budget::default()
+        );
     }
 }

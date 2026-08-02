@@ -111,7 +111,10 @@ impl MorningReport {
                 self.units_completed, self.units_uncheckpointed
             );
         }
-        format!("AgentRelay: {} unit(s) done, all validators passed", self.units_completed)
+        format!(
+            "AgentRelay: {} unit(s) done, all validators passed",
+            self.units_completed
+        )
     }
 }
 
@@ -189,7 +192,11 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
                     "{}: {} check(s) passed ({})",
                     u.id,
                     validations.len(),
-                    validations.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                    validations
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             });
             // Passing is only half of it. A unit with no checkpoint has no restore
@@ -210,8 +217,11 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
             }
         } else {
             failed += 1;
-            let broken: Vec<&str> =
-                validations.iter().filter(|(_, p)| !*p).map(|(n, _)| n.as_str()).collect();
+            let broken: Vec<&str> = validations
+                .iter()
+                .filter(|(_, p)| !*p)
+                .map(|(n, _)| n.as_str())
+                .collect();
             lines.push(Line {
                 provenance: Provenance::Verified,
                 text: format!(
@@ -227,7 +237,12 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
     for (sha, id) in &checkpoints {
         lines.push(Line {
             provenance: Provenance::Recorded,
-            text: format!("checkpoint {} ({}) — `git show {}` to read it", &sha[..7.min(sha.len())], id, &sha[..7.min(sha.len())]),
+            text: format!(
+                "checkpoint {} ({}) — `git show {}` to read it",
+                &sha[..7.min(sha.len())],
+                id,
+                &sha[..7.min(sha.len())]
+            ),
         });
     }
 
@@ -237,7 +252,11 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
         // The agent's own confirmation that a call did not execute. Stronger than
         // our record of refusing it, so it is labelled VERIFIED.
         if e.kind == "guard.advisory_only" {
-            let why = e.payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            let why = e
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             lines.push(Line {
                 provenance: Provenance::Recorded,
                 text: format!(
@@ -247,17 +266,23 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
             continue;
         }
         if e.kind == "tool.denied" {
-            let tool = e.payload.get("tool").and_then(|v| v.as_str()).unwrap_or("a tool");
+            let tool = e
+                .payload
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a tool");
             lines.push(Line {
                 provenance: Provenance::Verified,
-                text: format!(
-                    "the agent reported that its {tool} call was refused and never ran"
-                ),
+                text: format!("the agent reported that its {tool} call was refused and never ran"),
             });
             continue;
         }
         if e.kind == "fixloop.gave_up" {
-            let reason = e.payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            let reason = e
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             lines.push(Line {
                 provenance: Provenance::Recorded,
                 text: format!("the fix loop stopped and left this for you — {reason}"),
@@ -265,7 +290,11 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
             continue;
         }
         if e.kind == "drift.detected" {
-            let summary = e.payload.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            let summary = e
+                .payload
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             lines.push(Line {
                 // A heuristic, so it is labelled as one. Calling it VERIFIED would
                 // put a guess next to things a command actually proved.
@@ -277,9 +306,21 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
         if e.kind != "guard.violation" {
             continue;
         }
-        let guard = e.payload.get("guard").and_then(|v| v.as_str()).unwrap_or("a guard");
-        let reason = e.payload.get("reason_code").and_then(|v| v.as_str()).unwrap_or("");
-        let detail = e.payload.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+        let guard = e
+            .payload
+            .get("guard")
+            .and_then(|v| v.as_str())
+            .unwrap_or("a guard");
+        let reason = e
+            .payload
+            .get("reason_code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let detail = e
+            .payload
+            .get("detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         lines.push(Line {
             provenance: Provenance::Recorded,
             text: format!(
@@ -376,11 +417,26 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.to_str().unwrap().to_string();
-        let g = |a: &[&str]| std::process::Command::new("git").args(a).current_dir(&p).output().unwrap();
+        let g = |a: &[&str]| {
+            std::process::Command::new("git")
+                .args(a)
+                .current_dir(&p)
+                .output()
+                .unwrap()
+        };
         g(&["init", "-q", "-b", "main"]);
         std::fs::write(dir.join("seed.txt"), "s\n").unwrap();
         g(&["add", "-A"]);
-        g(&["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "base"]);
+        g(&[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@e.com",
+            "commit",
+            "-q",
+            "-m",
+            "base",
+        ]);
         p
     }
 
@@ -406,12 +462,32 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let cwd = tmp_repo();
         std::fs::create_dir_all(std::path::Path::new(&cwd).join(".agentrelay")).unwrap();
-        std::fs::write(std::path::Path::new(&cwd).join(".agentrelay").join("config.json"), "{}").unwrap();
-        std::fs::write(std::path::Path::new(&cwd).join(".agentrelay").join(".gitignore"), "*\n").unwrap();
+        std::fs::write(
+            std::path::Path::new(&cwd)
+                .join(".agentrelay")
+                .join("config.json"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::write(
+            std::path::Path::new(&cwd)
+                .join(".agentrelay")
+                .join(".gitignore"),
+            "*\n",
+        )
+        .unwrap();
 
         let r = build(&store, "m1", &cwd, 0);
-        assert!(!r.render().contains(".agentrelay"), "our files leaked in: {}", r.render());
-        assert!(r.nothing_happened, "a workspace with only our files never ran: {}", r.render());
+        assert!(
+            !r.render().contains(".agentrelay"),
+            "our files leaked in: {}",
+            r.render()
+        );
+        assert!(
+            r.nothing_happened,
+            "a workspace with only our files never ran: {}",
+            r.render()
+        );
         assert!(r.headline().contains("nothing ran"));
 
         // …but a REAL uncommitted user file is still reported.
@@ -428,7 +504,9 @@ mod tests {
         let cwd = tmp_repo();
         store.upsert_work_unit(&unit("u1")).unwrap();
         store.save_validation("u1", &result("tests", true)).unwrap();
-        store.save_validation("u1", &result("build", false)).unwrap();
+        store
+            .save_validation("u1", &result("build", false))
+            .unwrap();
 
         // The agent's half-finished work, still sitting in the tree.
         std::fs::write(std::path::Path::new(&cwd).join("half.txt"), "x\n").unwrap();
@@ -439,7 +517,10 @@ mod tests {
         let text = r.render();
         assert!(text.contains("FAILED"), "{text}");
         assert!(text.contains("build did not pass"), "{text}");
-        assert!(text.contains("NOT committed"), "the human must know where the work is");
+        assert!(
+            text.contains("NOT committed"),
+            "the human must know where the work is"
+        );
         assert!(text.contains("half.txt"), "and which files: {text}");
         assert!(r.headline().contains("FAILED"));
         let _ = std::fs::remove_dir_all(&cwd);
@@ -459,7 +540,11 @@ mod tests {
         // Passing is not the whole story: this unit produced no checkpoint, so the
         // report says there is nothing to go back to rather than calling it done.
         assert_eq!(r.units_uncheckpointed, 1);
-        assert!(r.headline().contains("NO restore point"), "{}", r.headline());
+        assert!(
+            r.headline().contains("NO restore point"),
+            "{}",
+            r.headline()
+        );
         assert!(r.needs_attention());
         let _ = std::fs::remove_dir_all(&cwd);
     }
@@ -488,7 +573,10 @@ mod tests {
         let r = build(&store, "m1", &cwd, 0);
         let text = r.render();
         assert!(text.contains("BLOCKED by no_push"), "{text}");
-        assert!(text.contains("git push origin main"), "and what exactly: {text}");
+        assert!(
+            text.contains("git push origin main"),
+            "and what exactly: {text}"
+        );
         assert!(text.contains("[RECORDED]"));
         assert!(!r.nothing_happened, "a blocked action is not a quiet night");
         let _ = std::fs::remove_dir_all(&cwd);
@@ -523,9 +611,17 @@ mod tests {
         store.save_validation("u1", &result("tests", true)).unwrap();
 
         let r = build(&store, "m1", &cwd, 0);
-        let cp_line = r.lines.iter().find(|l| l.text.contains("checkpoint")).expect("listed");
+        let cp_line = r
+            .lines
+            .iter()
+            .find(|l| l.text.contains("checkpoint"))
+            .expect("listed");
         assert_eq!(cp_line.provenance, Provenance::Recorded);
-        assert!(cp_line.text.contains("git show"), "a report you can act on: {}", cp_line.text);
+        assert!(
+            cp_line.text.contains("git show"),
+            "a report you can act on: {}",
+            cp_line.text
+        );
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
@@ -537,9 +633,17 @@ mod tests {
         store.save_validation("u1", &result("tests", true)).unwrap();
 
         let r = build(&store, "m1", &cwd, 4_096_000);
-        let saving = r.lines.iter().find(|l| l.text.contains("not re-sent")).unwrap();
+        let saving = r
+            .lines
+            .iter()
+            .find(|l| l.text.contains("not re-sent"))
+            .unwrap();
         assert_eq!(saving.provenance, Provenance::Estimated);
-        assert!(saving.text.contains("rough"), "the heuristic is stated: {}", saving.text);
+        assert!(
+            saving.text.contains("rough"),
+            "the heuristic is stated: {}",
+            saving.text
+        );
         assert!(r.render().contains("[ESTIMATED]"));
         let _ = std::fs::remove_dir_all(&cwd);
     }

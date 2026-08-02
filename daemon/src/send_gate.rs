@@ -73,7 +73,10 @@ pub fn is_trigger_due(trigger: &Trigger, ctx: &SendContext) -> bool {
             (Some(n), Some(a)) => n >= a,
             _ => false,
         },
-        Trigger::After { since_utc, after_ms } => match (to_ms(&ctx.now_utc), to_ms(since_utc)) {
+        Trigger::After {
+            since_utc,
+            after_ms,
+        } => match (to_ms(&ctx.now_utc), to_ms(since_utc)) {
             (Some(n), Some(s)) => n >= s + after_ms,
             _ => false,
         },
@@ -143,7 +146,9 @@ mod tests {
         ScheduledPrompt {
             id: "p".into(),
             target: "claude".into(),
-            trigger: Trigger::At { at: "2026-07-27T09:00:00Z".into() },
+            trigger: Trigger::At {
+                at: "2026-07-27T09:00:00Z".into(),
+            },
             body: "go".into(),
             condition: None,
             valid_until: None,
@@ -168,7 +173,9 @@ mod tests {
     #[test]
     fn holds_not_due() {
         let mut p = base();
-        p.trigger = Trigger::At { at: "2026-07-27T10:00:00Z".into() };
+        p.trigger = Trigger::At {
+            at: "2026-07-27T10:00:00Z".into(),
+        };
         assert_eq!(evaluate_send_gate(&p, &ctx()), SendVerdict::NotDue);
     }
 
@@ -212,15 +219,33 @@ mod tests {
     fn triggers() {
         let mut c = ctx();
         c.now_utc = "2026-07-27T09:00:01Z".into();
-        assert!(is_trigger_due(&Trigger::At { at: "2026-07-27T09:00:00Z".into() }, &c));
         assert!(is_trigger_due(
-            &Trigger::After { since_utc: "2026-07-27T08:00:00Z".into(), after_ms: 3_600_000 },
+            &Trigger::At {
+                at: "2026-07-27T09:00:00Z".into()
+            },
+            &c
+        ));
+        assert!(is_trigger_due(
+            &Trigger::After {
+                since_utc: "2026-07-27T08:00:00Z".into(),
+                after_ms: 3_600_000
+            },
             &ctx()
         ));
         c.fired_event = Some("ci.green".into());
-        assert!(is_trigger_due(&Trigger::OnEvent { event: "ci.green".into() }, &c));
+        assert!(is_trigger_due(
+            &Trigger::OnEvent {
+                event: "ci.green".into()
+            },
+            &c
+        ));
         c.cron_due = Some(true);
-        assert!(is_trigger_due(&Trigger::Cron { expr: "0 9 * * *".into() }, &c));
+        assert!(is_trigger_due(
+            &Trigger::Cron {
+                expr: "0 9 * * *".into()
+            },
+            &c
+        ));
     }
 
     #[test]
@@ -238,7 +263,9 @@ mod tests {
         let mut future = base();
         future.id = "future".into();
         future.priority = 95;
-        future.trigger = Trigger::At { at: "2026-07-27T23:00:00Z".into() }; // not due
+        future.trigger = Trigger::At {
+            at: "2026-07-27T23:00:00Z".into(),
+        }; // not due
         let prompts = vec![low, high, stale, future];
         assert_eq!(select_next_to_send(&prompts, &ctx()).unwrap().id, "high");
         let cancelled = {

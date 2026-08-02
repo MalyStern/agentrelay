@@ -68,7 +68,10 @@ impl KeepAwake {
             })?;
 
         match ready_rx.recv() {
-            Ok(true) => Ok(KeepAwake { release: Some(release_tx), worker: Some(worker) }),
+            Ok(true) => Ok(KeepAwake {
+                release: Some(release_tx),
+                worker: Some(worker),
+            }),
             _ => Err(crate::error::AgentRelayError::new(
                 crate::error::ErrorCode::Internal,
                 "SetThreadExecutionState failed",

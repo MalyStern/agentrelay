@@ -66,7 +66,10 @@ fn safe_guards() -> Vec<Guard> {
 /// likely to be watching, so the ceiling is low enough that a runaway is caught
 /// while it is still cheap.
 fn autopilot_budget() -> Budget {
-    Budget { mission_usd: Some(5.0), turn_usd: Some(1.0) }
+    Budget {
+        mission_usd: Some(5.0),
+        turn_usd: Some(1.0),
+    }
 }
 
 fn strings(v: &[&str]) -> Vec<String> {
@@ -98,30 +101,42 @@ impl Template {
     /// Look a template up by name. An unknown name is refused with the list of valid
     /// ones — the codebase's standard for a bad id, never a silent nearest-guess.
     pub fn for_name(name: &str) -> Result<Template> {
-        Self::all().into_iter().find(|t| t.name.eq_ignore_ascii_case(name)).ok_or_else(|| {
-            let valid = Self::all().iter().map(|t| t.name).collect::<Vec<_>>().join(", ");
-            AgentRelayError::new(
-                ErrorCode::Internal,
-                format!(
-                    "unknown template \"{name}\". Valid templates: {valid}. Run \
+        Self::all()
+            .into_iter()
+            .find(|t| t.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| {
+                let valid = Self::all()
+                    .iter()
+                    .map(|t| t.name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                AgentRelayError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "unknown template \"{name}\". Valid templates: {valid}. Run \
                      `agentrelay templates` to see what each one sets."
-                ),
-            )
-        })
+                    ),
+                )
+            })
     }
 
     /// The complete Config this template stands for — guards, validators, scope and
     /// budget, ready to write to `.agentrelay/config.json`.
     pub fn to_config(&self) -> Config {
-        let mut cfg = Config::default();
-        cfg.budget = autopilot_budget();
+        let mut cfg = Config {
+            budget: autopilot_budget(),
+            ..Config::default()
+        };
         match self.kind {
             Kind::FixFailingTests => {
                 cfg.guards = safe_guards();
                 cfg.validators = vec![Validator::named(ValidatorKind::Tests, "tests", "npm test")];
                 // A test fix touches source and tests; it should not rewrite the
                 // whole tree, so a size ceiling makes a runaway visible as drift.
-                cfg.scope = UnitScope { touches: strings(&["src/**", "tests/**", "test/**"]), max_files: Some(20) };
+                cfg.scope = UnitScope {
+                    touches: strings(&["src/**", "tests/**", "test/**"]),
+                    max_files: Some(20),
+                };
             }
             Kind::SafeRefactor => {
                 // A refactor must not quietly pull in new dependencies — that is a
@@ -135,7 +150,10 @@ impl Template {
                 ];
                 // Refactors balloon; a small ceiling turns a "quick cleanup" that
                 // rewrote forty files into a drift signal in the morning.
-                cfg.scope = UnitScope { touches: strings(&["src/**"]), max_files: Some(10) };
+                cfg.scope = UnitScope {
+                    touches: strings(&["src/**"]),
+                    max_files: Some(10),
+                };
             }
             Kind::DependencyUpdate => {
                 cfg.guards = safe_guards();
@@ -227,12 +245,20 @@ mod tests {
             let json = serde_json::to_string_pretty(&produced).unwrap();
             std::fs::write(root.join(".agentrelay/config.json"), &json).unwrap();
 
-            let d = Daemon::open(&root)
-                .unwrap_or_else(|e| panic!("template `{}` produced a config the loader rejected: {e}", t.name));
+            let d = Daemon::open(&root).unwrap_or_else(|e| {
+                panic!(
+                    "template `{}` produced a config the loader rejected: {e}",
+                    t.name
+                )
+            });
 
             let reloaded = serde_json::to_value(d.config()).unwrap();
             let original = serde_json::to_value(&produced).unwrap();
-            assert_eq!(reloaded, original, "template `{}` did not round-trip", t.name);
+            assert_eq!(
+                reloaded, original,
+                "template `{}` did not round-trip",
+                t.name
+            );
             let _ = std::fs::remove_dir_all(&root);
         }
     }
@@ -243,7 +269,11 @@ mod tests {
         // cost cap is the only guard over a thing git cannot restore, so shipping one
         // without it would be the most dangerous config we hand out.
         for t in Template::all() {
-            assert!(t.to_config().budget.is_set(), "template `{}` has no budget", t.name);
+            assert!(
+                t.to_config().budget.is_set(),
+                "template `{}` has no budget",
+                t.name
+            );
         }
     }
 
@@ -253,13 +283,30 @@ mod tests {
         // template may drop below the no-push / no-deploy / workspace-boundary floor.
         for t in Template::all() {
             let cfg = t.to_config();
-            assert!(!cfg.validators.is_empty(), "template `{}` gates completion on nothing", t.name);
+            assert!(
+                !cfg.validators.is_empty(),
+                "template `{}` gates completion on nothing",
+                t.name
+            );
             let kinds: Vec<GuardKind> = cfg.guards.iter().map(|g| g.kind).collect();
-            for required in [GuardKind::NoPush, GuardKind::NoDeploy, GuardKind::WorkspaceBoundary] {
-                assert!(kinds.contains(&required), "template `{}` dropped {:?}", t.name, required);
+            for required in [
+                GuardKind::NoPush,
+                GuardKind::NoDeploy,
+                GuardKind::WorkspaceBoundary,
+            ] {
+                assert!(
+                    kinds.contains(&required),
+                    "template `{}` dropped {:?}",
+                    t.name,
+                    required
+                );
             }
             // A stated scope, so drift is actually measured rather than "unchecked".
-            assert!(cfg.scope.is_stated(), "template `{}` has no scope for drift to measure", t.name);
+            assert!(
+                cfg.scope.is_stated(),
+                "template `{}` has no scope for drift to measure",
+                t.name
+            );
         }
     }
 
@@ -270,10 +317,18 @@ mod tests {
         // The valid names are in the message, so the user can fix the typo without
         // reading source.
         for t in Template::all() {
-            assert!(err.message.contains(t.name), "{} not listed: {}", t.name, err.message);
+            assert!(
+                err.message.contains(t.name),
+                "{} not listed: {}",
+                t.name,
+                err.message
+            );
         }
         // Names match case-insensitively, but a real name resolves.
-        assert_eq!(Template::for_name("Fix-Failing-Tests").unwrap().name, "fix-failing-tests");
+        assert_eq!(
+            Template::for_name("Fix-Failing-Tests").unwrap().name,
+            "fix-failing-tests"
+        );
     }
 
     #[test]
@@ -282,7 +337,10 @@ mod tests {
         // dependency is a behaviour change, not a cleanup.
         let cfg = Template::for_name("safe-refactor").unwrap().to_config();
         assert!(cfg.guards.iter().any(|g| g.kind == GuardKind::NoDependency));
-        assert!(cfg.scope.max_files.unwrap() <= 10, "a refactor's file ceiling is deliberately tight");
+        assert!(
+            cfg.scope.max_files.unwrap() <= 10,
+            "a refactor's file ceiling is deliberately tight"
+        );
     }
 
     #[test]
@@ -291,7 +349,12 @@ mod tests {
         // it must not present its guess as fact.
         for t in Template::all() {
             let notes = t.review_notes();
-            assert!(notes.iter().any(|n| n.contains("EXAMPLES")), "template `{}`: {:?}", t.name, notes);
+            assert!(
+                notes.iter().any(|n| n.contains("EXAMPLES")),
+                "template `{}`: {:?}",
+                t.name,
+                notes
+            );
         }
     }
 

@@ -89,7 +89,8 @@ pub fn command_for(program: &str) -> Option<tokio::process::Command> {
         }
         if ext == "ps1" {
             let mut c = tokio::process::Command::new("powershell");
-            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(&resolved);
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(&resolved);
             return Some(c);
         }
     }
@@ -115,7 +116,8 @@ pub fn std_command_for(program: &str) -> Option<std::process::Command> {
         }
         if ext == "ps1" {
             let mut c = std::process::Command::new("powershell");
-            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(&resolved);
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(&resolved);
             return Some(c);
         }
     }
@@ -195,8 +197,16 @@ mod tests {
         let resolved = resolve("ar-fake-agent").expect("a .cmd on PATH must be found");
         assert_eq!(resolved.extension().unwrap(), "cmd");
 
-        let out = command_for("ar-fake-agent").unwrap().output().await.unwrap();
-        assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+        let out = command_for("ar-fake-agent")
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(
             String::from_utf8_lossy(&out.stdout).contains("fake-agent-ran"),
             "the launcher did not actually run"
@@ -209,7 +219,10 @@ mod tests {
     #[test]
     fn a_missing_program_gets_advice_naming_the_command_to_run() {
         let hint = install_hint("claude");
-        assert!(hint.contains("npm install -g @anthropic-ai/claude-code"), "{hint}");
+        assert!(
+            hint.contains("npm install -g @anthropic-ai/claude-code"),
+            "{hint}"
+        );
         // The PATH-refresh step is the one people miss on Windows.
         assert!(hint.contains("new terminal"), "{hint}");
     }

@@ -23,16 +23,19 @@ pub struct InMemoryStore {
 
 impl SecretStore for InMemoryStore {
     fn set(&self, name: &str, secret: &str) -> Result<()> {
-        self.map.lock().unwrap().insert(name.to_string(), secret.to_string());
-        Ok(())
-    }
-    fn get(&self, name: &str) -> Result<String> {
         self.map
             .lock()
             .unwrap()
-            .get(name)
-            .cloned()
-            .ok_or_else(|| AgentRelayError::new(ErrorCode::CredentialUnavailable, format!("no secret '{name}'")))
+            .insert(name.to_string(), secret.to_string());
+        Ok(())
+    }
+    fn get(&self, name: &str) -> Result<String> {
+        self.map.lock().unwrap().get(name).cloned().ok_or_else(|| {
+            AgentRelayError::new(
+                ErrorCode::CredentialUnavailable,
+                format!("no secret '{name}'"),
+            )
+        })
     }
     fn delete(&self, name: &str) -> Result<()> {
         self.map.lock().unwrap().remove(name);
@@ -48,7 +51,9 @@ pub struct OsKeychain {
 
 impl OsKeychain {
     pub fn new(service: impl Into<String>) -> Self {
-        OsKeychain { service: service.into() }
+        OsKeychain {
+            service: service.into(),
+        }
     }
     fn entry(&self, name: &str) -> Result<keyring::Entry> {
         keyring::Entry::new(&self.service, name)
@@ -151,7 +156,10 @@ mod tests {
         assert!(!format!("{r:?}").contains("ghp_secret_value"));
         assert_eq!(b.get_secret("github_token").unwrap(), "ghp_secret_value");
         b.delete_secret("github_token").unwrap();
-        assert_eq!(b.get_secret("github_token").unwrap_err().code, ErrorCode::CredentialUnavailable);
+        assert_eq!(
+            b.get_secret("github_token").unwrap_err().code,
+            ErrorCode::CredentialUnavailable
+        );
     }
 
     #[test]
@@ -160,7 +168,10 @@ mod tests {
         b.store_secret("gh", "tok1").unwrap();
         b.store_secret("stripe", "tok2").unwrap();
         let env = b
-            .env_for(&[("GITHUB_TOKEN".into(), "gh".into()), ("STRIPE_KEY".into(), "stripe".into())])
+            .env_for(&[
+                ("GITHUB_TOKEN".into(), "gh".into()),
+                ("STRIPE_KEY".into(), "stripe".into()),
+            ])
             .unwrap();
         assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("tok1"));
         assert_eq!(env.get("STRIPE_KEY").map(String::as_str), Some("tok2"));
@@ -170,7 +181,10 @@ mod tests {
 
     #[test]
     fn redact_masks_secrets_longest_first() {
-        let out = redact("token=ghp_abc123 and short=abc", &["abc".into(), "ghp_abc123".into()]);
+        let out = redact(
+            "token=ghp_abc123 and short=abc",
+            &["abc".into(), "ghp_abc123".into()],
+        );
         assert!(!out.contains("ghp_abc123"));
         assert_eq!(out, "token=*** and short=***");
     }

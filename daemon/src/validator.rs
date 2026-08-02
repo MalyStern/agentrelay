@@ -43,16 +43,26 @@ pub struct Validator {
 
 impl Validator {
     pub fn new(kind: ValidatorKind, command: impl Into<String>) -> Self {
-        Validator { kind, command: command.into(), name: None }
+        Validator {
+            kind,
+            command: command.into(),
+            name: None,
+        }
     }
 
     pub fn named(kind: ValidatorKind, name: impl Into<String>, command: impl Into<String>) -> Self {
-        Validator { kind, command: command.into(), name: Some(name.into()) }
+        Validator {
+            kind,
+            command: command.into(),
+            name: Some(name.into()),
+        }
     }
 
     /// What to show the user: the label if there is one, else the kind.
     pub fn label(&self) -> String {
-        self.name.clone().unwrap_or_else(|| self.kind.as_str().to_string())
+        self.name
+            .clone()
+            .unwrap_or_else(|| self.kind.as_str().to_string())
     }
 }
 
@@ -113,7 +123,10 @@ pub async fn run_validator(v: &Validator, cwd: &str) -> ValidationResult {
         Ok(o) => {
             let mut buf = o.stdout;
             buf.extend_from_slice(&o.stderr);
-            (o.status.success(), String::from_utf8_lossy(&buf).into_owned())
+            (
+                o.status.success(),
+                String::from_utf8_lossy(&buf).into_owned(),
+            )
         }
         Err(e) => (false, e.to_string()),
     };
@@ -192,7 +205,7 @@ mod tests {
         let v = Validator::new(
             ValidatorKind::Custom,
             // A quoted path WITH A SPACE, and a quoted argument containing one.
-            &format!("node \"{}\" \"two words\"", script.display()),
+            format!("node \"{}\" \"two words\"", script.display()),
         );
         let r = run_validator(&v, ".").await;
         assert!(r.passed, "the command should just run: {}", r.output);
@@ -219,20 +232,34 @@ mod tests {
         )
         .unwrap();
 
-        let v = Validator::new(ValidatorKind::Tests, &format!("node \"{}\"", script.display()));
+        let v = Validator::new(
+            ValidatorKind::Tests,
+            format!("node \"{}\"", script.display()),
+        );
         let r = run_validator(&v, ".").await;
 
         assert!(!r.passed);
-        assert!(r.output.contains("FAIL src/thing.test.ts"), "the failure survives");
+        assert!(
+            r.output.contains("FAIL src/thing.test.ts"),
+            "the failure survives"
+        );
         assert!(r.output.contains("Tests: 1 failed"), "and the summary line");
         assert!(r.output.contains("omitted"), "and it admits what it cut");
-        assert!(r.output.len() < 20_000, "while staying small: {} bytes", r.output.len());
+        assert!(
+            r.output.len() < 20_000,
+            "while staying small: {} bytes",
+            r.output.len()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn failing_command_fails() {
-        let r = run_validator(&Validator::new(ValidatorKind::Build, "this-command-does-not-exist-xyz-123"), ".").await;
+        let r = run_validator(
+            &Validator::new(ValidatorKind::Build, "this-command-does-not-exist-xyz-123"),
+            ".",
+        )
+        .await;
         assert!(!r.passed);
     }
 
@@ -245,10 +272,14 @@ mod tests {
         let results = run_all(&vals, ".").await;
         assert_eq!(results.len(), 2);
         assert!(!all_passed(&results)); // one failed -> not done
-        // an empty set is NOT "passed" (nothing was proven).
+                                        // an empty set is NOT "passed" (nothing was proven).
         assert!(!all_passed(&[]));
         // all-pass case
-        let ok = run_all(&[Validator::new(ValidatorKind::Tests, "node --version")], ".").await;
+        let ok = run_all(
+            &[Validator::new(ValidatorKind::Tests, "node --version")],
+            ".",
+        )
+        .await;
         assert!(all_passed(&ok));
     }
 }

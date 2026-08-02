@@ -234,15 +234,21 @@ console.log(JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{update
             events.push(e);
         }
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "working")),
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "working")),
             "{events:?}"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "scratchpad")),
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "scratchpad")),
             "the scratchpad must not reach the timeline: {events:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::TokenUsage { usage } if usage.input_tokens == 12)),
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::TokenUsage { usage } if usage.input_tokens == 12)),
             "{events:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -279,14 +285,18 @@ console.log(JSON.stringify({jsonrpc:"2.0",id:9,method:"session/requestPermission
 
         // We told the report it was denied…
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::ToolDenied { tool, .. } if tool == "Bash")),
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolDenied { tool, .. } if tool == "Bash")),
             "{events:?}"
         );
         // …and the agent actually received the refusal.
         let decision = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::TextDelta { text } if text.starts_with("DECISION:") => Some(text.clone()),
+                AgentEvent::TextDelta { text } if text.starts_with("DECISION:") => {
+                    Some(text.clone())
+                }
                 _ => None,
             })
             .expect("the agent must have received a reply");
@@ -309,14 +319,18 @@ console.log(JSON.stringify({jsonrpc:"2.0",id:1,method:"session/requestPermission
   toolCall:{title:"Bash", rawInput:{command:"npm test"}}}}));
 "#;
         let (dir, args) = fake_agent(script);
-        let (mut stream, _s) = spawn_acp("node", &args, ".", vec![Guard::new(GuardKind::NoPush)]).unwrap();
+        let (mut stream, _s) =
+            spawn_acp("node", &args, ".", vec![Guard::new(GuardKind::NoPush)]).unwrap();
         let mut texts = Vec::new();
         while let Some(e) = stream.next().await {
             if let AgentEvent::TextDelta { text } = e {
                 texts.push(text);
             }
         }
-        let d = texts.iter().find(|t| t.starts_with("DECISION:")).expect("a reply");
+        let d = texts
+            .iter()
+            .find(|t| t.starts_with("DECISION:"))
+            .expect("a reply");
         assert!(d.contains("selected"), "ordinary work must be allowed: {d}");
         let _ = std::fs::remove_dir_all(&dir);
     }

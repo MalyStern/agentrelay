@@ -67,16 +67,22 @@ fn git(cwd: &str, args: &[&str]) -> Result<String> {
 
 /// Is this a git worktree at all? Everything else here assumes it is.
 pub fn is_repo(cwd: &str) -> bool {
-    git(cwd, &["rev-parse", "--is-inside-work-tree"]).map(|s| s == "true").unwrap_or(false)
+    git(cwd, &["rev-parse", "--is-inside-work-tree"])
+        .map(|s| s == "true")
+        .unwrap_or(false)
 }
 
 pub fn head(cwd: &str) -> Option<String> {
-    git(cwd, &["rev-parse", "HEAD"]).ok().filter(|s| !s.is_empty())
+    git(cwd, &["rev-parse", "HEAD"])
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// The branch name, or None on a detached HEAD.
 pub fn branch(cwd: &str) -> Option<String> {
-    git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"]).ok().filter(|s| !s.is_empty() && s != "HEAD")
+    git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()
+        .filter(|s| !s.is_empty() && s != "HEAD")
 }
 
 /// Paths with uncommitted changes, staged or not, including untracked files.
@@ -89,7 +95,14 @@ pub fn dirty_paths(cwd: &str) -> Result<Vec<String>> {
     // is literal: no quoting, no escaping, and a rename is simply two records.
     let out = git_raw(
         cwd,
-        &["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &[
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
     )?;
 
     let mut paths = Vec::new();
@@ -243,12 +256,19 @@ pub fn is_ours(cwd: &str, rev: &str) -> bool {
 pub fn list(cwd: &str, limit: usize) -> Result<Vec<(String, String)>> {
     let raw = git(
         cwd,
-        &["log", &format!("-{}", limit.max(1)), "--format=%H%x1f%B%x1e", &format!("--grep={CHECKPOINT_TRAILER}")],
+        &[
+            "log",
+            &format!("-{}", limit.max(1)),
+            "--format=%H%x1f%B%x1e",
+            &format!("--grep={CHECKPOINT_TRAILER}"),
+        ],
     )?;
     let mut out = Vec::new();
     for rec in raw.split('\u{1e}') {
         let rec = rec.trim_start_matches('\n');
-        let Some((sha, body)) = rec.split_once('\u{1f}') else { continue };
+        let Some((sha, body)) = rec.split_once('\u{1f}') else {
+            continue;
+        };
         if sha.is_empty() {
             continue;
         }
@@ -307,7 +327,16 @@ mod tests {
         git(&p, &["add", "-A"]).unwrap();
         git(
             &p,
-            &["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "base"],
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.com",
+                "commit",
+                "-q",
+                "-m",
+                "base",
+            ],
         )
         .unwrap();
         p
@@ -326,11 +355,32 @@ mod tests {
         // user's files is worse than no report.
         let p = repo();
         std::fs::create_dir_all(std::path::Path::new(&p).join(".config")).unwrap();
-        std::fs::write(std::path::Path::new(&p).join(".config/settings.json"), "{}\n").unwrap();
+        std::fs::write(
+            std::path::Path::new(&p).join(".config/settings.json"),
+            "{}\n",
+        )
+        .unwrap();
         git(&p, &["add", "-A"]).unwrap();
-        git(&p, &["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "add"]).unwrap();
+        git(
+            &p,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.com",
+                "commit",
+                "-q",
+                "-m",
+                "add",
+            ],
+        )
+        .unwrap();
 
-        std::fs::write(std::path::Path::new(&p).join(".config/settings.json"), "{\"a\":1}\n").unwrap();
+        std::fs::write(
+            std::path::Path::new(&p).join(".config/settings.json"),
+            "{\"a\":1}\n",
+        )
+        .unwrap();
         std::fs::write(std::path::Path::new(&p).join("zz.txt"), "second\n").unwrap();
 
         let dirty = dirty_paths(&p).unwrap();
@@ -352,15 +402,34 @@ mod tests {
         std::fs::write(dir.join("שלום.txt"), "hello\n").unwrap();
         std::fs::write(dir.join("before.txt"), "content\n").unwrap();
         git(&p, &["add", "-A"]).unwrap();
-        git(&p, &["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "add"]).unwrap();
+        git(
+            &p,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.com",
+                "commit",
+                "-q",
+                "-m",
+                "add",
+            ],
+        )
+        .unwrap();
 
         std::fs::rename(dir.join("before.txt"), dir.join("after.txt")).unwrap();
         std::fs::write(dir.join("שלום.txt"), "changed\n").unwrap();
         git(&p, &["add", "-A"]).unwrap();
 
         let dirty = dirty_paths(&p).unwrap();
-        assert!(dirty.contains(&"שלום.txt".to_string()), "octal-escaped: {dirty:?}");
-        assert!(dirty.contains(&"after.txt".to_string()), "the file that now exists: {dirty:?}");
+        assert!(
+            dirty.contains(&"שלום.txt".to_string()),
+            "octal-escaped: {dirty:?}"
+        );
+        assert!(
+            dirty.contains(&"after.txt".to_string()),
+            "the file that now exists: {dirty:?}"
+        );
         assert!(
             !dirty.iter().any(|d| d.contains("->")),
             "a rename must not be reported as one impossible path: {dirty:?}"
@@ -373,7 +442,10 @@ mod tests {
         let p = repo();
         let before = head(&p).unwrap();
         let cp = create(&p, "c1", "nothing happened").unwrap();
-        assert!(!cp.created, "a turn that changed nothing must not leave an empty commit");
+        assert!(
+            !cp.created,
+            "a turn that changed nothing must not leave an empty commit"
+        );
         assert_eq!(cp.files_changed, 0);
         assert_eq!(head(&p).unwrap(), before, "HEAD must not move");
         cleanup(&p);
@@ -397,7 +469,10 @@ mod tests {
         assert!(is_ours(&p, &cp.head));
         assert!(!is_ours(&p, &before));
         let author = git(&p, &["log", "-1", "--format=%an <%ae>", &cp.head]).unwrap();
-        assert_eq!(author, format!("{CHECKPOINT_AUTHOR_NAME} <{CHECKPOINT_AUTHOR_EMAIL}>"));
+        assert_eq!(
+            author,
+            format!("{CHECKPOINT_AUTHOR_NAME} <{CHECKPOINT_AUTHOR_EMAIL}>")
+        );
         let subject = git(&p, &["log", "-1", "--format=%s", &cp.head]).unwrap();
         assert_eq!(subject, "unit 3: add the parser");
         cleanup(&p);
@@ -412,7 +487,20 @@ mod tests {
         // A commit the human (or the agent) made — must not appear as a checkpoint.
         std::fs::write(std::path::Path::new(&p).join("b.txt"), "human\n").unwrap();
         git(&p, &["add", "-A"]).unwrap();
-        git(&p, &["-c", "user.name=H", "-c", "user.email=h@e.com", "commit", "-q", "-m", "by hand"]).unwrap();
+        git(
+            &p,
+            &[
+                "-c",
+                "user.name=H",
+                "-c",
+                "user.email=h@e.com",
+                "commit",
+                "-q",
+                "-m",
+                "by hand",
+            ],
+        )
+        .unwrap();
 
         std::fs::write(std::path::Path::new(&p).join("a.txt"), "y\n").unwrap();
         create(&p, "c2", "second unit").unwrap();
@@ -440,7 +528,8 @@ mod tests {
 
     #[test]
     fn a_non_repo_is_refused_with_a_useful_message() {
-        let dir = std::env::temp_dir().join(format!("ar-nogit-{}", N.fetch_add(1, Ordering::SeqCst)));
+        let dir =
+            std::env::temp_dir().join(format!("ar-nogit-{}", N.fetch_add(1, Ordering::SeqCst)));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.to_str().unwrap();
         assert!(!is_repo(p));

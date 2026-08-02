@@ -69,9 +69,10 @@ impl ProcessGroup {
         }
         #[cfg(unix)]
         {
-            self.inner
-                .pgid
-                .store(child.id().unwrap_or(0) as i32, std::sync::atomic::Ordering::SeqCst);
+            self.inner.pgid.store(
+                child.id().unwrap_or(0) as i32,
+                std::sync::atomic::Ordering::SeqCst,
+            );
         }
         Ok(child)
     }
@@ -144,8 +145,8 @@ mod win {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, FALSE, HANDLE};
     use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
@@ -224,7 +225,11 @@ mod tests {
         let child_js = dir.join(format!("agentrelay-child-{}.js", std::process::id()));
         let parent_js = dir.join(format!("agentrelay-parent-{}.js", std::process::id()));
         // grandchild: after 1.5s, write the marker (proof it survived).
-        std::fs::write(&child_js, "setTimeout(()=>require('fs').writeFileSync(process.argv[2],'x'),1500);").unwrap();
+        std::fs::write(
+            &child_js,
+            "setTimeout(()=>require('fs').writeFileSync(process.argv[2],'x'),1500);",
+        )
+        .unwrap();
         // root: wait 400ms (so it's already in the job), spawn the grandchild, then idle.
         std::fs::write(
             &parent_js,
@@ -234,7 +239,11 @@ mod tests {
 
         let group = ProcessGroup::new().unwrap();
         let mut cmd = Command::new("node");
-        cmd.args([parent_js.to_str().unwrap(), child_js.to_str().unwrap(), marker.to_str().unwrap()]);
+        cmd.args([
+            parent_js.to_str().unwrap(),
+            child_js.to_str().unwrap(),
+            marker.to_str().unwrap(),
+        ]);
         let _child = group.spawn(&mut cmd).unwrap();
 
         sleep(Duration::from_millis(800)).await; // grandchild spawned (at 400ms) and joined the job
@@ -245,6 +254,9 @@ mod tests {
         for p in [&marker, &child_js, &parent_js] {
             let _ = std::fs::remove_file(p);
         }
-        assert!(!survived, "grandchild survived kill_tree (tree kill failed)");
+        assert!(
+            !survived,
+            "grandchild survived kill_tree (tree kill failed)"
+        );
     }
 }

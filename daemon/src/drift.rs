@@ -82,7 +82,10 @@ impl DriftReport {
         if self.signals.is_empty() {
             return "The changes stayed inside what this unit said it would touch.".to_string();
         }
-        let mut s = format!("{} sign(s) that the work drifted from the task:", self.signals.len());
+        let mut s = format!(
+            "{} sign(s) that the work drifted from the task:",
+            self.signals.len()
+        );
         for d in &self.signals {
             s.push_str(&format!("\n  - {}", d.describe()));
         }
@@ -100,7 +103,10 @@ impl DriftReport {
 fn unrelated_area(path: &str) -> Option<String> {
     let p = path.replace('\\', "/").to_ascii_lowercase();
     let hits: &[(&str, &str)] = &[
-        (".github/workflows/", "changes how CI runs, which is not usually part of a code task"),
+        (
+            ".github/workflows/",
+            "changes how CI runs, which is not usually part of a code task",
+        ),
         ("dockerfile", "changes how the project is built or shipped"),
         ("docker-compose", "changes how services are wired"),
         (".env", "touches configuration that usually holds secrets"),
@@ -124,7 +130,10 @@ pub fn detect(scope: &UnitScope, changed_paths: &[String]) -> DriftReport {
     if !scope.is_stated() {
         // No intent was declared, so there is nothing to drift from. Saying "no
         // drift" here would be a claim we did not earn.
-        return DriftReport { signals: vec![], unchecked: true };
+        return DriftReport {
+            signals: vec![],
+            unchecked: true,
+        };
     }
 
     let mut signals = Vec::new();
@@ -151,11 +160,17 @@ pub fn detect(scope: &UnitScope, changed_paths: &[String]) -> DriftReport {
             continue;
         }
         if let Some(why) = unrelated_area(path) {
-            signals.push(DriftSignal::UnrelatedArea { path: path.clone(), why });
+            signals.push(DriftSignal::UnrelatedArea {
+                path: path.clone(),
+                why,
+            });
         }
     }
 
-    DriftReport { signals, unchecked: false }
+    DriftReport {
+        signals,
+        unchecked: false,
+    }
 }
 
 #[cfg(test)]
@@ -179,8 +194,14 @@ mod tests {
 
     #[test]
     fn work_inside_the_declared_scope_is_clean() {
-        let scope = UnitScope { touches: paths(&["src/parser/**"]), max_files: None };
-        let r = detect(&scope, &paths(&["src/parser/lexer.rs", "src/parser/mod.rs"]));
+        let scope = UnitScope {
+            touches: paths(&["src/parser/**"]),
+            max_files: None,
+        };
+        let r = detect(
+            &scope,
+            &paths(&["src/parser/lexer.rs", "src/parser/mod.rs"]),
+        );
         assert!(!r.has_drift(), "{:?}", r.signals);
         assert!(!r.unchecked);
         assert!(r.summary().contains("stayed inside"));
@@ -190,10 +211,17 @@ mod tests {
     fn the_night_that_fixed_the_wrong_thing_is_caught() {
         // The failure this layer exists for: every command allowed, every test
         // green, and the wrong problem solved.
-        let scope = UnitScope { touches: paths(&["src/parser/**"]), max_files: None };
+        let scope = UnitScope {
+            touches: paths(&["src/parser/**"]),
+            max_files: None,
+        };
         let r = detect(
             &scope,
-            &paths(&["src/parser/lexer.rs", "build/webpack.config.js", "scripts/deploy.sh"]),
+            &paths(&[
+                "src/parser/lexer.rs",
+                "build/webpack.config.js",
+                "scripts/deploy.sh",
+            ]),
         );
         assert!(r.has_drift());
         let text = r.summary();
@@ -204,7 +232,10 @@ mod tests {
 
     #[test]
     fn a_small_task_that_rewrote_the_repo_is_drift_even_when_every_file_is_in_scope() {
-        let scope = UnitScope { touches: paths(&["src/**"]), max_files: Some(3) };
+        let scope = UnitScope {
+            touches: paths(&["src/**"]),
+            max_files: Some(3),
+        };
         let changed: Vec<String> = (0..40).map(|i| format!("src/f{i}.rs")).collect();
         let r = detect(&scope, &changed);
         match r.signals.first() {
@@ -220,7 +251,10 @@ mod tests {
     fn touching_ci_or_dependencies_is_flagged_even_when_technically_in_scope() {
         // A task allowed to touch everything still should not quietly rewrite how
         // CI runs or what the project depends on.
-        let scope = UnitScope { touches: paths(&["**"]), max_files: None };
+        let scope = UnitScope {
+            touches: paths(&["**"]),
+            max_files: None,
+        };
         let r = detect(
             &scope,
             &paths(&[".github/workflows/ci.yml", "package.json", "src/ok.rs"]),
@@ -228,12 +262,18 @@ mod tests {
         let text = r.summary();
         assert!(text.contains("changes how CI runs"), "{text}");
         assert!(text.contains("changes dependencies or scripts"), "{text}");
-        assert!(!text.contains("src/ok.rs"), "ordinary code is not flagged: {text}");
+        assert!(
+            !text.contains("src/ok.rs"),
+            "ordinary code is not flagged: {text}"
+        );
     }
 
     #[test]
     fn our_own_directory_is_never_drift() {
-        let scope = UnitScope { touches: paths(&["src/**"]), max_files: None };
+        let scope = UnitScope {
+            touches: paths(&["src/**"]),
+            max_files: None,
+        };
         let r = detect(&scope, &paths(&[".agentrelay/config.json", "src/a.rs"]));
         assert!(!r.has_drift(), "{:?}", r.signals);
     }
@@ -242,7 +282,10 @@ mod tests {
     fn a_file_outside_scope_is_reported_once_not_twice() {
         // package.json is both out of scope AND a flagged area. Two lines about one
         // file is noise, and noise is how a real signal gets skimmed past.
-        let scope = UnitScope { touches: paths(&["src/**"]), max_files: None };
+        let scope = UnitScope {
+            touches: paths(&["src/**"]),
+            max_files: None,
+        };
         let r = detect(&scope, &paths(&["package.json"]));
         assert_eq!(r.signals.len(), 1, "{:?}", r.signals);
     }
@@ -251,16 +294,30 @@ mod tests {
     fn drift_reports_and_never_stops_the_run() {
         // Layer 3 is a heuristic. A false stop at 3am costs a whole night, so being
         // decisive is left to the layers that are certain.
-        let scope = UnitScope { touches: paths(&["src/**"]), max_files: None };
+        let scope = UnitScope {
+            touches: paths(&["src/**"]),
+            max_files: None,
+        };
         let r = detect(&scope, &paths(&["elsewhere/x.rs"]));
         assert!(r.has_drift());
-        assert!(r.summary().contains("heuristic, not a verdict"), "{}", r.summary());
-        assert!(r.summary().contains("the work was not stopped"), "{}", r.summary());
+        assert!(
+            r.summary().contains("heuristic, not a verdict"),
+            "{}",
+            r.summary()
+        );
+        assert!(
+            r.summary().contains("the work was not stopped"),
+            "{}",
+            r.summary()
+        );
     }
 
     #[test]
     fn scope_round_trips_through_config() {
-        let s = UnitScope { touches: paths(&["src/**", "tests/**"]), max_files: Some(10) };
+        let s = UnitScope {
+            touches: paths(&["src/**", "tests/**"]),
+            max_files: Some(10),
+        };
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<UnitScope>(&json).unwrap(), s);
         assert!(!serde_json::from_str::<UnitScope>("{}").unwrap().is_stated());

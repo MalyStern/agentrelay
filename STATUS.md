@@ -1,54 +1,44 @@
 # AgentRelay — build status
 
-Tracks each component: **✅ built + tested** here (TS, verifiable), **🟨 scaffolded** (structure/types, pending the Rust machine), **⬜ not started**. Phases are from the final plan ([`docs/02`](docs/02-תוכנית-סופית.md) §יד).
+> **This file used to describe an early stage** — a Node `runner` as an executable
+> spec, with the Rust daemon "scaffolded, pending the Rust machine," 71 tests. That
+> is no longer where the project is, and leaving the old text here was misleading.
+> The daemon is built and tested. This is the current, honest picture.
 
-Legend: component — state — notes.
+_Last updated 2026-08-02._
 
-## Phase 0 — spikes + foundation
+## What actually runs today
 
-| Component | State | Notes |
+| Component | State | Where |
 |---|---|---|
-| Normalized contracts (`AgentEvent`, `ProviderAdapter`, `QuotaState`, error taxonomy, event kinds) | ✅ | `runner/src/contracts`. Language-neutral; the Rust `trait`/`enum` mirror these. |
-| Fake `ProviderAdapter` | ✅ | `runner/src/providers/fake`. Scripted turns; reproduces rate-limit-mid-turn, session-GC, interrupt. |
-| Record / replay harness | ✅ | `runner/src/testing`. Record a real stream to a fixture, replay deterministically — no quota burned. |
-| Kill-test A (engine can replace a tool result?) | ⬜ | Needs a live Claude engine; the `transformToolResult` capability flag is wired in the contract. |
-| Kill-test B (detect rate-limit + clean resume on a real session) | ⬜ | Replayable once recorded; live recording pending. |
-| Kill-test C (kill-tree catches Docker/WSL children, 3 OSes) | ⬜ | Process Manager work; OS-level, needs the daemon. |
-| SQLite hybrid schema (append-log + state-tables) | ✅ | `runner/src/store`. Full DDL (00 §4 + 02 new tables), typed Store over `node:sqlite` (events/transitions/missions/work_units/checkpoints), `payload_ver`, no hash-chain. Tested in-memory. |
-| Claude stream-json → AgentEvent parser | ✅ | `runner/src/providers/claude`. Buffered NDJSON reader, session-id + done tracking. |
-| CLI skeleton | ⬜ | |
-| no-hardcoded-strings lint + pseudo-loc | ⬜ | i18n foundation. |
+| **Daemon** (Rust) — the product | ✅ built + tested, **284 tests** | [`daemon/`](daemon/) |
+| Blocking PreToolUse guard (denies forbidden calls *before* they run) | ✅ | `daemon/src/hook.rs`, `policy` |
+| "Done" gated on real test evidence (no green without proof) | ✅ | `daemon/src/report.rs`, `templates.rs` |
+| Checkpoints to git — only validated work, never your uncommitted files | ✅ | `daemon/src/report.rs` |
+| Spend cap + provenance-labelled morning report (VERIFIED/RECORDED/ESTIMATED) | ✅ | `daemon/src/report.rs` |
+| Local HTTP IPC (status/report over loopback) | ✅ | `daemon/src/ipc.rs` |
+| Context optimizer (file receipts = hash truth; output compression, states what it cut) | ✅ | `daemon/src/context.rs` |
+| **Desktop app** (Tauri v2) — talks to the daemon over loopback | ✅ builds on all 3 OSes | [`app/`](app/) |
+| **Claude Code plugin** — hooks + slash commands + skill + MCP, fail-safe when the engine is absent | ✅ | [`plugin/`](plugin/) |
+| **i18n** message catalogue (keys, interpolation, bidi, plurals validated) | ✅ | [`i18n/`](i18n/) |
+| `runner/` — the original Node executable spec | ✅ kept as a reference spec | [`runner/`](runner/) |
 
-## Phase 1 — control core (Claude/SDK) + base safety — the MVP
+Everything above is exercised by CI on **Linux, Windows, and macOS** on every push —
+see [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The daemon job runs
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (warnings are errors),
+and the full test suite.
 
-| Component | State | Notes |
-|---|---|---|
-| Claude adapter (Agent SDK + Hooks) | 🟨 | Contract + fake in place; stream-json parser next. |
-| Watchtower layer-1 guard evaluator (PreToolUse brain, §ז.4) | ✅ | `runner/src/policy`. no_push/deploy/net/dependency, workspace-boundary, allowed/forbid paths+cmds. Deterministic, reason-codes. |
-| Process Manager (pgid/Job-Object, external_resources, reconcile-before-stop) | ⬜ | Rust/OS; scaffold in daemon. |
-| Quota Manager (reactive, resume plan, session-verify-before-window, first-turn read-only) | ✅ | `runner/src/quota`. Pure decision core + tracker. Integration-tested with the rate-limit fixture end-to-end. |
-| Credential Broker (keyring + GitHub-App) + redaction | ⬜ | |
-| Keep-awake (ES_CONTINUOUS…) | ⬜ | OS; scaffold. |
-| Context-Optimizer core (File-Receipts, Output-Compressor, Context-Health=Estimated) | ⬜ | Runs in the Node engine (SDK transform / updatedToolOutput). |
-| ntfy / Telegram operational push | ⬜ | TS-implementable + testable. |
-| Scheduler send-gate (stale-proof queue, §10) | ✅ | `runner/src/scheduler`. at/after/on_event/cron triggers, expiry, mission-version supersede, condition gate, priority select. Pure + tested. |
-| Timeline (bidi-isolation) + morning report | ⬜ | |
+## Honest limits (what this is *not*)
 
-## Phases 2–4
+- The guards **block known-forbidden actions**; they are not a sandbox. Real
+  enforcement is guards **plus** OS-level isolation with the network off. An unknown
+  tool name a guard has never heard of produces no proposed actions and is allowed —
+  so the strong claim is "blocks the actions it classifies," not "stops anything."
+- The Windows release binaries are **unsigned**. SmartScreen will warn. Checksums are
+  published with each release; code-signing needs a certificate and is out of scope
+  for now.
 
-⬜ Watchtower 3-layer + guard table · Isolation-Ring · VCS/CI loop · cost-ledger · Codex adapter · ACP generic · Relay Orchestrator · Cloud-delegated · full 23-language i18n · research track (parallelism/merge-queue).
+## History
 
-## QA pass (adversarial review, 2026-07-27)
-
-An adversarial review of the whole `runner` found — and this commit fixes — 2 critical + 5 lesser issues, each with a regression test:
-- **CRIT** path-traversal defeated the containment guards (`..` wasn't normalized) → added `normPath`; workspace/allowed/forbid path guards now resolve `.`/`..` first.
-- **CRIT** the first-turn "read-only" guard blocked `Write`/`Edit` but not shell writes/`git push`/network → new `read_only` guard with an inspection-only command allowlist.
-- **HIGH** command classifiers missed `git -C … push`, `kubectl --context … apply`, `$(curl …)` → tightened to match the invoked binary anywhere on the line.
-- **HIGH** `planResumeAfterRateLimit`/`sessionVerifyDeadline` threw `RangeError` on a malformed provider `resetAt` → NaN-safe with a documented fallback reset.
-- **MED** stream parser dropped a newline-less final `result` line → added `flush()`.
-- **MED** send-gate could `send` an expired/stale prompt on a `NaN` `validUntil`/`missionVer` → now fails closed.
-- **LOW** `forbid_cmd` with an invalid regex threw → fails closed (blocks).
-
-## Verification snapshot
-
-- `runner`: 71 tests passing (contracts · fake · record/replay · guard-eval · quota · claude-stream · store · send-gate · qa-fixes regressions), `tsc --noEmit` clean, 0 npm vulnerabilities. CI green on win/mac/linux × node 22/24.
+The phase-by-phase build log and the adversarial QA passes live in
+[`CONTINUITY.md`](CONTINUITY.md). The design docs are under [`docs/`](docs/).

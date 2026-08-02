@@ -308,7 +308,11 @@ pub fn parse_devin_submit(v: &serde_json::Value) -> Result<CloudSession> {
         })?;
     Ok(CloudSession {
         id: id.to_string(),
-        web_url: v.get("url").or_else(|| v.get("web_url")).and_then(|x| x.as_str()).map(String::from),
+        web_url: v
+            .get("url")
+            .or_else(|| v.get("web_url"))
+            .and_then(|x| x.as_str())
+            .map(String::from),
     })
 }
 
@@ -330,7 +334,9 @@ pub fn parse_devin_poll(v: &serde_json::Value) -> PollState {
                 .unwrap_or("waiting for input on the provider's side")
                 .to_string(),
         },
-        "finished" | "completed" | "done" | "success" => PollState::Done { pr_url: find_pr_url(v) },
+        "finished" | "completed" | "done" | "success" => PollState::Done {
+            pr_url: find_pr_url(v),
+        },
         "expired" | "failed" | "error" | "cancelled" | "canceled" => PollState::Failed {
             reason: v
                 .get("status_message")
@@ -341,7 +347,9 @@ pub fn parse_devin_poll(v: &serde_json::Value) -> PollState {
         // Anything else, including a missing status, is reported honestly rather
         // than assumed. "" becomes an Unknown with an empty raw, which describe()
         // still routes to "go look".
-        _ => PollState::Unknown { raw: raw.to_string() },
+        _ => PollState::Unknown {
+            raw: raw.to_string(),
+        },
     }
 }
 
@@ -356,7 +364,13 @@ pub fn parse_devin_poll(v: &serde_json::Value) -> PollState {
 /// request; polling for that PR is the seam below.
 pub fn copilot_submit_request(base: &str, token: &str, repo: &str, prompt: &str) -> CloudRequest {
     // Title is the first line; the whole prompt is the body so nothing is lost.
-    let title = prompt.lines().next().unwrap_or("AgentRelay task").chars().take(120).collect::<String>();
+    let title = prompt
+        .lines()
+        .next()
+        .unwrap_or("AgentRelay task")
+        .chars()
+        .take(120)
+        .collect::<String>();
     CloudRequest {
         method: "POST",
         url: format!("{}/repos/{}/issues", base.trim_end_matches('/'), repo),
@@ -375,10 +389,20 @@ pub fn copilot_submit_request(base: &str, token: &str, repo: &str, prompt: &str)
 
 /// Build the request that reads the issue Copilot is working from:
 /// `GET {base}/repos/{repo}/issues/{number}`.
-pub fn copilot_poll_request(base: &str, token: &str, repo: &str, issue_number: &str) -> CloudRequest {
+pub fn copilot_poll_request(
+    base: &str,
+    token: &str,
+    repo: &str,
+    issue_number: &str,
+) -> CloudRequest {
     CloudRequest {
         method: "GET",
-        url: format!("{}/repos/{}/issues/{}", base.trim_end_matches('/'), repo, issue_number),
+        url: format!(
+            "{}/repos/{}/issues/{}",
+            base.trim_end_matches('/'),
+            repo,
+            issue_number
+        ),
         auth: auth_header(token),
         content_type: None,
         body: None,
@@ -417,7 +441,9 @@ pub fn parse_copilot_poll(v: &serde_json::Value) -> PollState {
             None => PollState::Running,
         },
         "closed" => PollState::Done { pr_url: pr },
-        other => PollState::Unknown { raw: other.to_string() },
+        other => PollState::Unknown {
+            raw: other.to_string(),
+        },
     }
 }
 
@@ -488,7 +514,9 @@ pub fn parse_poll(provider: CloudProvider, v: &serde_json::Value) -> PollState {
     match provider {
         CloudProvider::Devin => parse_devin_poll(v),
         CloudProvider::Copilot => parse_copilot_poll(v),
-        CloudProvider::None => PollState::Unknown { raw: "no provider".to_string() },
+        CloudProvider::None => PollState::Unknown {
+            raw: "no provider".to_string(),
+        },
     }
 }
 
@@ -521,7 +549,8 @@ pub fn execute(req: &CloudRequest) -> Result<serde_json::Value> {
             if let Some(ct) = req.content_type {
                 rb = rb.header("Content-Type", ct);
             }
-            rb.send(req.body.as_deref().unwrap_or("")).map_err(net_err)?
+            rb.send(req.body.as_deref().unwrap_or(""))
+                .map_err(net_err)?
         }
         other => {
             return Err(AgentRelayError::new(
@@ -562,7 +591,10 @@ mod tests {
         assert_eq!(c.provider, CloudProvider::None);
         let d = c.describe();
         assert!(d.contains("Cloud delegation is OFF"), "{d}");
-        assert!(d.contains("guards, checkpoints and budget cap all apply"), "{d}");
+        assert!(
+            d.contains("guards, checkpoints and budget cap all apply"),
+            "{d}"
+        );
     }
 
     #[test]
@@ -588,7 +620,10 @@ mod tests {
     fn submitting_without_the_token_env_configured_is_a_loud_named_error() {
         // No token_env at all: the failure names what to set, it does not silently
         // send an empty Authorization header.
-        let c = CloudConfig { provider: CloudProvider::Devin, ..Default::default() };
+        let c = CloudConfig {
+            provider: CloudProvider::Devin,
+            ..Default::default()
+        };
         let err = submit_request(&c, "fix the parser").unwrap_err();
         assert_eq!(err.code, ErrorCode::CredentialUnavailable);
         assert!(err.message.contains("cloud.token_env"), "{}", err.message);
@@ -599,7 +634,10 @@ mod tests {
         // The variable is named in config but not exported. The error must name IT,
         // so the user knows exactly which variable to set — and no token is invented.
         let var = "AGENTRELAY_TEST_TOKEN_THAT_IS_NOT_SET_XYZ";
-        assert!(std::env::var(var).is_err(), "test precondition: the var must be unset");
+        assert!(
+            std::env::var(var).is_err(),
+            "test precondition: the var must be unset"
+        );
         let c = CloudConfig {
             provider: CloudProvider::Devin,
             token_env: Some(var.to_string()),
@@ -616,7 +654,10 @@ mod tests {
         let req = devin_submit_request("https://api.devin.ai", "tok_123", "fix the flaky test");
         assert_eq!(req.method, "POST");
         assert_eq!(req.url, "https://api.devin.ai/v3/sessions");
-        assert_eq!(req.auth, ("Authorization".to_string(), "Bearer tok_123".to_string()));
+        assert_eq!(
+            req.auth,
+            ("Authorization".to_string(), "Bearer tok_123".to_string())
+        );
         // The prompt is carried in the JSON body, not the URL — a task is not a query
         // parameter, and secrets in URLs are a rule this codebase keeps.
         let body: serde_json::Value = serde_json::from_str(req.body.as_ref().unwrap()).unwrap();
@@ -639,10 +680,14 @@ mod tests {
     #[test]
     fn a_devin_submit_response_yields_a_session_we_can_poll() {
         // Synthetic, shaped like the documented response.
-        let v = json!({ "session_id": "devin-abc123", "url": "https://app.devin.ai/sessions/abc123" });
+        let v =
+            json!({ "session_id": "devin-abc123", "url": "https://app.devin.ai/sessions/abc123" });
         let s = parse_devin_submit(&v).unwrap();
         assert_eq!(s.id, "devin-abc123");
-        assert_eq!(s.web_url.as_deref(), Some("https://app.devin.ai/sessions/abc123"));
+        assert_eq!(
+            s.web_url.as_deref(),
+            Some("https://app.devin.ai/sessions/abc123")
+        );
 
         // A response with no id cannot be polled, and that is an error — not a
         // session with an empty id that every later poll would 404 on.
@@ -652,9 +697,17 @@ mod tests {
 
     #[test]
     fn the_devin_poll_parser_walks_the_whole_lifecycle() {
-        assert_eq!(parse_devin_poll(&json!({ "status_enum": "queued" })), PollState::Pending);
-        assert_eq!(parse_devin_poll(&json!({ "status_enum": "running" })), PollState::Running);
-        match parse_devin_poll(&json!({ "status_enum": "blocked", "status_message": "needs a decision" })) {
+        assert_eq!(
+            parse_devin_poll(&json!({ "status_enum": "queued" })),
+            PollState::Pending
+        );
+        assert_eq!(
+            parse_devin_poll(&json!({ "status_enum": "running" })),
+            PollState::Running
+        );
+        match parse_devin_poll(
+            &json!({ "status_enum": "blocked", "status_message": "needs a decision" }),
+        ) {
             PollState::Blocked { reason } => assert!(reason.contains("needs a decision")),
             other => panic!("expected blocked, got {other:?}"),
         }
@@ -662,7 +715,9 @@ mod tests {
             "status_enum": "finished",
             "pull_request": { "html_url": "https://github.com/o/r/pull/7" }
         })) {
-            PollState::Done { pr_url } => assert_eq!(pr_url.as_deref(), Some("https://github.com/o/r/pull/7")),
+            PollState::Done { pr_url } => {
+                assert_eq!(pr_url.as_deref(), Some("https://github.com/o/r/pull/7"))
+            }
             other => panic!("expected done with a PR, got {other:?}"),
         }
         match parse_devin_poll(&json!({ "status_enum": "expired" })) {
@@ -677,7 +732,12 @@ mod tests {
         // user their PR is ready when it is not. A new/unknown status must degrade
         // to "go look", never to Done.
         let s = parse_devin_poll(&json!({ "status_enum": "some_new_state_we_never_saw" }));
-        assert_eq!(s, PollState::Unknown { raw: "some_new_state_we_never_saw".into() });
+        assert_eq!(
+            s,
+            PollState::Unknown {
+                raw: "some_new_state_we_never_saw".into()
+            }
+        );
         assert!(!s.is_terminal(), "an unknown status is not a finished one");
         assert!(s.describe().contains("not one AgentRelay recognises"));
 
@@ -692,7 +752,11 @@ mod tests {
         let s = parse_devin_poll(&json!({ "status_enum": "finished" }));
         assert_eq!(s, PollState::Done { pr_url: None });
         assert!(s.is_terminal());
-        assert!(s.describe().contains("no pull-request URL"), "{}", s.describe());
+        assert!(
+            s.describe().contains("no pull-request URL"),
+            "{}",
+            s.describe()
+        );
     }
 
     #[test]
@@ -703,13 +767,17 @@ mod tests {
             repo: Some("acme/widgets".into()),
             ..Default::default()
         };
-        let req = submit_request_with_token(&c, "gh_tok", "Fix login bug\nmore detail here").unwrap();
+        let req =
+            submit_request_with_token(&c, "gh_tok", "Fix login bug\nmore detail here").unwrap();
         assert_eq!(req.method, "POST");
         assert_eq!(req.url, "https://api.github.com/repos/acme/widgets/issues");
         let body: serde_json::Value = serde_json::from_str(req.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["assignees"][0], "copilot-swe-agent[bot]");
         assert_eq!(body["title"], "Fix login bug", "title is the first line");
-        assert_eq!(body["body"], "Fix login bug\nmore detail here", "the whole prompt is kept");
+        assert_eq!(
+            body["body"], "Fix login bug\nmore detail here",
+            "the whole prompt is kept"
+        );
     }
 
     #[test]
@@ -727,15 +795,25 @@ mod tests {
     #[test]
     fn the_copilot_poll_parser_is_conservative_about_completion() {
         // Open issue, no PR yet: still running.
-        assert_eq!(parse_copilot_poll(&json!({ "state": "open" })), PollState::Running);
+        assert_eq!(
+            parse_copilot_poll(&json!({ "state": "open" })),
+            PollState::Running
+        );
         // Closed issue with a discoverable PR: done, with the URL.
-        match parse_copilot_poll(&json!({ "state": "closed", "pr_url": "https://github.com/o/r/pull/9" })) {
-            PollState::Done { pr_url } => assert_eq!(pr_url.as_deref(), Some("https://github.com/o/r/pull/9")),
+        match parse_copilot_poll(
+            &json!({ "state": "closed", "pr_url": "https://github.com/o/r/pull/9" }),
+        ) {
+            PollState::Done { pr_url } => {
+                assert_eq!(pr_url.as_deref(), Some("https://github.com/o/r/pull/9"))
+            }
             other => panic!("expected done, got {other:?}"),
         }
         // Closed with no PR we can find: done but honest about the missing link,
         // never a fabricated URL.
-        assert_eq!(parse_copilot_poll(&json!({ "state": "closed" })), PollState::Done { pr_url: None });
+        assert_eq!(
+            parse_copilot_poll(&json!({ "state": "closed" })),
+            PollState::Done { pr_url: None }
+        );
     }
 
     #[test]
@@ -749,24 +827,39 @@ mod tests {
         let s = serde_json::to_string(&c).unwrap();
         assert_eq!(serde_json::from_str::<CloudConfig>(&s).unwrap(), c);
         // An absent cloud block is off, not an error.
-        assert_eq!(serde_json::from_str::<CloudConfig>("{}").unwrap(), CloudConfig::default());
-        assert!(!serde_json::from_str::<CloudConfig>("{}").unwrap().is_enabled());
+        assert_eq!(
+            serde_json::from_str::<CloudConfig>("{}").unwrap(),
+            CloudConfig::default()
+        );
+        assert!(!serde_json::from_str::<CloudConfig>("{}")
+            .unwrap()
+            .is_enabled());
         // The token is NEVER part of the serialized config — only the variable name.
         assert!(!s.contains("Bearer"), "{s}");
     }
 
     /// A tiny test seam so the Copilot submit path can be exercised without an
     /// environment variable — production always resolves the token from ENV.
-    fn submit_request_with_token(cfg: &CloudConfig, token: &str, prompt: &str) -> Result<CloudRequest> {
+    fn submit_request_with_token(
+        cfg: &CloudConfig,
+        token: &str,
+        prompt: &str,
+    ) -> Result<CloudRequest> {
         match cfg.provider {
             CloudProvider::Copilot => {
                 let repo = cfg.repo.as_deref().ok_or_else(|| {
-                    AgentRelayError::new(ErrorCode::Internal, "Copilot needs a target repository: set `cloud.repo` to \"owner/name\"".to_string())
+                    AgentRelayError::new(
+                        ErrorCode::Internal,
+                        "Copilot needs a target repository: set `cloud.repo` to \"owner/name\""
+                            .to_string(),
+                    )
                 })?;
                 Ok(copilot_submit_request(cfg.base(), token, repo, prompt))
             }
             CloudProvider::Devin => Ok(devin_submit_request(cfg.base(), token, prompt)),
-            CloudProvider::None => Err(AgentRelayError::new(ErrorCode::Internal, "off".to_string())),
+            CloudProvider::None => {
+                Err(AgentRelayError::new(ErrorCode::Internal, "off".to_string()))
+            }
         }
     }
 
@@ -779,6 +872,9 @@ mod tests {
         let hostile: String = "\u{2764}".repeat(300);
         let cut: String = hostile.chars().take(200).collect();
         assert_eq!(cut.chars().count(), 200);
-        assert!(cut.len() > 200, "bytes exceed chars, and taking chars did not panic");
+        assert!(
+            cut.len() > 200,
+            "bytes exceed chars, and taking chars did not panic"
+        );
     }
 }

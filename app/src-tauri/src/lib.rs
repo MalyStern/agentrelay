@@ -91,7 +91,11 @@ fn sibling_daemon() -> Option<PathBuf> {
     let mut here = exe.parent()?.to_path_buf();
     for _ in 0..6 {
         for profile in ["release", "debug"] {
-            let cand = here.join("daemon").join("target").join(profile).join(bin_name());
+            let cand = here
+                .join("daemon")
+                .join("target")
+                .join(profile)
+                .join(bin_name());
             if cand.is_file() {
                 return Some(cand);
             }
@@ -299,8 +303,10 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     let said = std::fs::read_to_string(&log).unwrap_or_default();
     let said = said.trim();
     if said.is_empty() {
-        Err("the daemon did not begin listening within 10 seconds (and printed nothing)."
-            .to_string())
+        Err(
+            "the daemon did not begin listening within 10 seconds (and printed nothing)."
+                .to_string(),
+        )
     } else {
         Err(format!(
             "the daemon did not begin listening within 10 seconds. It said:\n{said}"
@@ -330,8 +336,7 @@ fn current_connection(app: &tauri::AppHandle) -> Result<Connection, String> {
         .unwrap()
         .clone()
         .ok_or("no workspace chosen")?;
-    read_connection(&ws)
-        .ok_or_else(|| "the daemon is not running — start it first".to_string())
+    read_connection(&ws).ok_or_else(|| "the daemon is not running — start it first".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

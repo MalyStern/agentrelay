@@ -25,7 +25,7 @@
 use serde::{Deserialize, Serialize};
 
 /// How (or whether) to isolate the agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Isolation {
     /// Container image to run in. `None` — the default — means no isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,12 +42,6 @@ pub struct Isolation {
     pub cpus: Option<String>,
 }
 
-impl Default for Isolation {
-    fn default() -> Self {
-        Isolation { image: None, allow_network: vec![], memory: None, cpus: None }
-    }
-}
-
 impl Isolation {
     pub fn is_enabled(&self) -> bool {
         self.image.is_some()
@@ -61,8 +55,10 @@ impl Isolation {
                     network and your files."
                 .to_string();
         };
-        let mut s = format!("Isolation is ON: the agent runs inside `{image}`, with only the \
-                             workspace mounted.");
+        let mut s = format!(
+            "Isolation is ON: the agent runs inside `{image}`, with only the \
+                             workspace mounted."
+        );
         if self.allow_network.is_empty() {
             s.push_str("\nNetwork: OFF. Nothing the agent runs can reach the internet.");
         } else {
@@ -162,7 +158,10 @@ mod tests {
     use super::*;
 
     fn iso(image: &str) -> Isolation {
-        Isolation { image: Some(image.into()), ..Default::default() }
+        Isolation {
+            image: Some(image.into()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -195,23 +194,36 @@ mod tests {
             .filter(|(i, _)| i > &0 && args[i - 1] == "-v")
             .map(|(_, v)| v)
             .collect();
-        assert_eq!(mounts, vec!["/home/u/proj:/work"], "exactly one mount, the worktree");
+        assert_eq!(
+            mounts,
+            vec!["/home/u/proj:/work"],
+            "exactly one mount, the worktree"
+        );
         // The things a leak would want are not reachable because they are not there.
         let joined = args.join(" ");
         assert!(!joined.contains(".ssh"), "{joined}");
-        assert!(!joined.contains("docker.sock"), "mounting the socket would undo all of this");
+        assert!(
+            !joined.contains("docker.sock"),
+            "mounting the socket would undo all of this"
+        );
         assert!(!joined.contains("--privileged"), "{joined}");
     }
 
     #[test]
     fn the_container_cannot_escalate_or_rewrite_itself() {
         let joined = docker_args(&iso("node:20"), "/w", "/work").join(" ");
-        assert!(joined.contains("--security-opt no-new-privileges"), "{joined}");
+        assert!(
+            joined.contains("--security-opt no-new-privileges"),
+            "{joined}"
+        );
         assert!(joined.contains("--cap-drop ALL"), "{joined}");
         assert!(joined.contains("--read-only"), "{joined}");
         // …but build tools still need scratch space, or nothing works and the
         // feature gets switched off.
-        assert!(joined.contains("--tmpfs /tmp:rw,exec,nosuid,size=1g"), "{joined}");
+        assert!(
+            joined.contains("--tmpfs /tmp:rw,exec,nosuid,size=1g"),
+            "{joined}"
+        );
     }
 
     #[test]
@@ -246,7 +258,9 @@ mod tests {
         assert!(d.contains("cannot enforce a host allowlist"), "{d}");
         assert!(d.contains("treat it as network ON"), "{d}");
         // And with any allowlist, --network none is correctly NOT applied.
-        assert!(!docker_args(&i, "/w", "/work").join(" ").contains("--network none"));
+        assert!(!docker_args(&i, "/w", "/work")
+            .join(" ")
+            .contains("--network none"));
     }
 
     /// Run the real thing. Skipped when Docker is not available, because a test
@@ -264,13 +278,19 @@ mod tests {
         std::fs::write(dir.join("hello.txt"), "workspace file\n").unwrap();
         let ws = dir.to_string_lossy().to_string();
 
-        let i = Isolation { image: Some("alpine:3".into()), ..Default::default() };
+        let i = Isolation {
+            image: Some("alpine:3".into()),
+            ..Default::default()
+        };
         let run = |script: &str| -> String {
             let mut args = docker_args(&i, &ws, "/work");
             args.push("sh".into());
             args.push("-c".into());
             args.push(script.into());
-            let out = std::process::Command::new("docker").args(&args).output().unwrap();
+            let out = std::process::Command::new("docker")
+                .args(&args)
+                .output()
+                .unwrap();
             format!(
                 "{}{}",
                 String::from_utf8_lossy(&out.stdout),
@@ -279,20 +299,35 @@ mod tests {
         };
 
         // 1. The worktree is there — otherwise the agent has nothing to work on.
-        assert!(run("cat hello.txt").contains("workspace file"), "workspace not mounted");
+        assert!(
+            run("cat hello.txt").contains("workspace file"),
+            "workspace not mounted"
+        );
 
         // 2. It is WRITABLE despite the read-only root. If this broke, isolation
         //    would be useless in practice and get switched off.
-        assert!(run("echo x > out.txt && echo WROTE").contains("WROTE"), "cannot write results");
-        assert!(dir.join("out.txt").exists(), "the write did not reach the host");
+        assert!(
+            run("echo x > out.txt && echo WROTE").contains("WROTE"),
+            "cannot write results"
+        );
+        assert!(
+            dir.join("out.txt").exists(),
+            "the write did not reach the host"
+        );
 
         // 3. Nothing can reach the network. This is the property the whole feature
         //    exists for: not "the agent probably won't exfiltrate", but cannot.
         let net = run("wget -q -T 3 -O- http://example.com 2>&1 || echo BLOCKED");
-        assert!(net.contains("BLOCKED") || net.contains("bad address"), "network reachable: {net}");
+        assert!(
+            net.contains("BLOCKED") || net.contains("bad address"),
+            "network reachable: {net}"
+        );
 
         // 4. The image cannot be rewritten.
-        assert!(run("touch /evil 2>&1 || echo READONLY").contains("READONLY"), "root is writable");
+        assert!(
+            run("touch /evil 2>&1 || echo READONLY").contains("READONLY"),
+            "root is writable"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -303,6 +338,9 @@ mod tests {
         let i: Isolation = serde_json::from_str(json).unwrap();
         assert_eq!(i.image.as_deref(), Some("node:20"));
         assert_eq!(i.memory.as_deref(), Some("4g"));
-        assert_eq!(serde_json::from_str::<Isolation>("{}").unwrap(), Isolation::default());
+        assert_eq!(
+            serde_json::from_str::<Isolation>("{}").unwrap(),
+            Isolation::default()
+        );
     }
 }

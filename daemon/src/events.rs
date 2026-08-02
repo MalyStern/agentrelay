@@ -103,7 +103,9 @@ pub enum AgentEvent {
     /// The charged amount, not an estimate from a price table that goes stale.
     /// Distinct from token counts because money is the unit a person can act on at
     /// 3am, and the only resource here that cannot be restored from git.
-    CostReported { usd: f64 },
+    CostReported {
+        usd: f64,
+    },
     /// The provider confirming a tool call did NOT run.
     ///
     /// Emitted from the `permission_denials` list the agent reports at the end of a

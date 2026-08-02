@@ -43,7 +43,10 @@ pub enum ReadDecision {
     Send { receipt: FileReceipt, changed: bool },
     /// Byte-identical to what the agent was already given. Skipping is safe
     /// *because the hash matched*, not because anything was summarised.
-    AlreadyHave { receipt: FileReceipt, saved_bytes: usize },
+    AlreadyHave {
+        receipt: FileReceipt,
+        saved_bytes: usize,
+    },
 }
 
 impl ReadDecision {
@@ -108,7 +111,10 @@ impl ReceiptBook {
                 // later compaction think the content is fresher than it is.
                 r.turn = prev.turn;
                 self.seen.insert(path.to_string(), r.clone());
-                ReadDecision::AlreadyHave { receipt: r, saved_bytes: content.len() }
+                ReadDecision::AlreadyHave {
+                    receipt: r,
+                    saved_bytes: content.len(),
+                }
             }
             prev => {
                 let changed = prev.is_some();
@@ -137,8 +143,8 @@ impl ReceiptBook {
 
 /// Lines worth keeping even when everything around them is cut.
 const SIGNAL: &[&str] = &[
-    "error", "Error", "ERROR", "fail", "Fail", "FAIL", "panic", "assert",
-    "✕", "✗", "×", "not ok", "Expected", "Received", "warning:", "cannot", "Cannot",
+    "error", "Error", "ERROR", "fail", "Fail", "FAIL", "panic", "assert", "✕", "✗", "×", "not ok",
+    "Expected", "Received", "warning:", "cannot", "Cannot",
 ];
 
 fn is_signal(line: &str) -> bool {
@@ -174,16 +180,21 @@ pub fn compress_output(raw: &str, head: usize, tail: usize, max_signal: usize) -
     let original_bytes = raw.len();
 
     if total <= head + tail {
-        return Compressed { text: raw.to_string(), original_lines: total, kept_lines: total, original_bytes };
+        return Compressed {
+            text: raw.to_string(),
+            original_lines: total,
+            kept_lines: total,
+            original_bytes,
+        };
     }
 
     let mut keep = vec![false; total];
-    for i in 0..head.min(total) {
-        keep[i] = true;
-    }
-    for i in total.saturating_sub(tail)..total {
-        keep[i] = true;
-    }
+    keep.iter_mut()
+        .take(head.min(total))
+        .for_each(|k| *k = true);
+    keep.iter_mut()
+        .skip(total.saturating_sub(tail))
+        .for_each(|k| *k = true);
 
     let mut signal_kept = 0;
     let mut signal_dropped = 0;
@@ -223,7 +234,10 @@ pub fn compress_output(raw: &str, head: usize, tail: usize, max_signal: usize) -
         }
     }
     if let Some(start) = run_start {
-        out.push_str(&format!("[agentrelay] … {} line(s) omitted …\n", total - start));
+        out.push_str(&format!(
+            "[agentrelay] … {} line(s) omitted …\n",
+            total - start
+        ));
     }
 
     let removed = total - kept_lines;
@@ -239,7 +253,12 @@ pub fn compress_output(raw: &str, head: usize, tail: usize, max_signal: usize) -
     }
     out.push_str(". Full output is available on request.\n");
 
-    Compressed { text: out, original_lines: total, kept_lines, original_bytes }
+    Compressed {
+        text: out,
+        original_lines: total,
+        kept_lines,
+        original_bytes,
+    }
 }
 
 /// An *estimate* of context pressure. Named so nobody mistakes it for a
@@ -257,7 +276,11 @@ impl ContextHealthEstimated {
     /// ~4 bytes per token is the usual rough figure for English + code. It is a
     /// rule of thumb, which is precisely why the type says so.
     pub fn from_bytes(bytes: u64, limit_tokens: u64) -> Self {
-        ContextHealthEstimated { estimated_tokens: bytes / 4, limit_tokens, is_estimate: true }
+        ContextHealthEstimated {
+            estimated_tokens: bytes / 4,
+            limit_tokens,
+            is_estimate: true,
+        }
     }
     pub fn pressure(&self) -> f64 {
         if self.limit_tokens == 0 {
@@ -286,9 +309,15 @@ mod tests {
         assert!(d1.should_send(), "never seen before");
 
         let d2 = book.observe("src/a.rs", b"fn main() {}", 2);
-        assert!(!d2.should_send(), "byte-identical: the agent already has it");
+        assert!(
+            !d2.should_send(),
+            "byte-identical: the agent already has it"
+        );
         match d2 {
-            ReadDecision::AlreadyHave { saved_bytes, receipt } => {
+            ReadDecision::AlreadyHave {
+                saved_bytes,
+                receipt,
+            } => {
                 assert_eq!(saved_bytes, 12);
                 assert_eq!(receipt.turn, 1, "the turn that actually holds the bytes");
             }
@@ -306,7 +335,9 @@ mod tests {
         let d = book.observe("src/a.rs", b"fn main() { changed(); }", 2);
         assert!(d.should_send());
         match d {
-            ReadDecision::Send { changed, .. } => assert!(changed, "flagged as a change, not a first read"),
+            ReadDecision::Send { changed, .. } => {
+                assert!(changed, "flagged as a change, not a first read")
+            }
             _ => unreachable!(),
         }
     }
@@ -329,7 +360,10 @@ mod tests {
         let d = book.observe("src/a.rs", b"x", 2);
         let notice = ReceiptBook::skip_notice(d.receipt());
         assert!(notice.contains("byte-for-byte identical"));
-        assert!(notice.contains("re-sent"), "a full read must always be reachable");
+        assert!(
+            notice.contains("re-sent"),
+            "a full read must always be reachable"
+        );
         // It must never present a summary as if it were the file.
         assert!(!notice.to_lowercase().contains("summary"));
     }
@@ -356,11 +390,27 @@ mod tests {
         raw.push_str("Tests: 1 failed, 1000 passed\n");
 
         let c = compress_output(&raw, 3, 3, 20);
-        assert!(c.text.contains("FAIL src/thing.test.ts"), "the failure survives");
-        assert!(c.text.contains("Expected: 4"), "and so does what it expected");
-        assert!(c.text.contains("Tests: 1 failed"), "the summary line survives");
-        assert!(c.kept_lines < 40, "but not the 1000 passes: kept {}", c.kept_lines);
-        assert!(c.saved_bytes() > raw.len() / 2, "at least half the bytes saved");
+        assert!(
+            c.text.contains("FAIL src/thing.test.ts"),
+            "the failure survives"
+        );
+        assert!(
+            c.text.contains("Expected: 4"),
+            "and so does what it expected"
+        );
+        assert!(
+            c.text.contains("Tests: 1 failed"),
+            "the summary line survives"
+        );
+        assert!(
+            c.kept_lines < 40,
+            "but not the 1000 passes: kept {}",
+            c.kept_lines
+        );
+        assert!(
+            c.saved_bytes() > raw.len() / 2,
+            "at least half the bytes saved"
+        );
         assert!(c.text.contains("omitted"), "and it says lines were removed");
     }
 
@@ -396,7 +446,9 @@ mod tests {
         assert_eq!(h.estimated_tokens, 100_000);
         assert!((h.pressure() - 0.5).abs() < 1e-9);
         assert!(h.describe().contains("ESTIMATED"));
-        assert!(serde_json::to_string(&h).unwrap().contains("\"is_estimate\":true"));
+        assert!(serde_json::to_string(&h)
+            .unwrap()
+            .contains("\"is_estimate\":true"));
     }
 
     #[test]

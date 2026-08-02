@@ -57,7 +57,9 @@ fn usage_from(v: &Value) -> Usage {
     let g = |k: &str| v.get(k).and_then(|x| x.as_u64());
     Usage {
         input_tokens: g("input_tokens").or_else(|| g("inputTokens")).unwrap_or(0),
-        output_tokens: g("output_tokens").or_else(|| g("outputTokens")).unwrap_or(0),
+        output_tokens: g("output_tokens")
+            .or_else(|| g("outputTokens"))
+            .unwrap_or(0),
         cache_read_tokens: g("cached_input_tokens").or_else(|| g("cacheReadTokens")),
         cache_creation_tokens: None,
         total_tokens: g("total_tokens").or_else(|| g("totalTokens")),
@@ -97,9 +99,9 @@ pub fn parse_codex_line(line: &Value) -> Vec<AgentEvent> {
         // here: it is not the answer and must not enter the timeline as one.
         k if k.contains("reasoning") || k.contains("thinking") => vec![],
 
-        k if k.contains("agent_message") || k.contains("message.delta") => {
-            text_of(body).map(|text| vec![AgentEvent::TextDelta { text }]).unwrap_or_default()
-        }
+        k if k.contains("agent_message") || k.contains("message.delta") => text_of(body)
+            .map(|text| vec![AgentEvent::TextDelta { text }])
+            .unwrap_or_default(),
 
         // A command Codex is about to run. This is the guard's only chance, and it
         // is a chance to react rather than to prevent.
@@ -135,7 +137,11 @@ pub fn parse_codex_line(line: &Value) -> Vec<AgentEvent> {
                 .get("changes")
                 .and_then(|c| c.as_object())
                 .map(|m| m.keys().cloned().collect())
-                .or_else(|| body.get("path").and_then(|p| p.as_str()).map(|p| vec![p.to_string()]))
+                .or_else(|| {
+                    body.get("path")
+                        .and_then(|p| p.as_str())
+                        .map(|p| vec![p.to_string()])
+                })
                 .unwrap_or_default();
             paths
                 .into_iter()
@@ -147,13 +153,20 @@ pub fn parse_codex_line(line: &Value) -> Vec<AgentEvent> {
         }
 
         k if k.contains("token_count") || k.contains("tokenUsage") || k.contains("usage") => {
-            let u = body.get("info").or_else(|| body.get("usage")).unwrap_or(body);
-            vec![AgentEvent::TokenUsage { usage: usage_from(u) }]
+            let u = body
+                .get("info")
+                .or_else(|| body.get("usage"))
+                .unwrap_or(body);
+            vec![AgentEvent::TokenUsage {
+                usage: usage_from(u),
+            }]
         }
 
         k if k.contains("task_complete") || k.contains("turn.completed") => {
             let u = body.get("usage").unwrap_or(&Value::Null);
-            vec![AgentEvent::TurnCompleted { usage: usage_from(u) }]
+            vec![AgentEvent::TurnCompleted {
+                usage: usage_from(u),
+            }]
         }
 
         k if k.contains("error") => {
@@ -162,14 +175,21 @@ pub fn parse_codex_line(line: &Value) -> Vec<AgentEvent> {
             if rate_limited {
                 vec![
                     AgentEvent::RateLimited {
-                        reset_at: crate::claude_stream::parse_reset_at(&message).unwrap_or_default(),
+                        reset_at: crate::claude_stream::parse_reset_at(&message)
+                            .unwrap_or_default(),
                         window: None,
                         provider: Some("codex".into()),
                     },
-                    AgentEvent::Error { message, code: Some("quota.rate_limited".into()) },
+                    AgentEvent::Error {
+                        message,
+                        code: Some("quota.rate_limited".into()),
+                    },
                 ]
             } else {
-                vec![AgentEvent::Error { message, code: Some("provider.stream_error".into()) }]
+                vec![AgentEvent::Error {
+                    message,
+                    code: Some("provider.stream_error".into()),
+                }]
             }
         }
 
@@ -206,7 +226,9 @@ mod tests {
                 assert_eq!(tool, "Bash");
                 assert_eq!(args["command"], "git push origin main");
                 let actions = crate::guard::derive_actions(tool, args);
-                let guards = vec![crate::provider::Guard::new(crate::provider::GuardKind::NoPush)];
+                let guards = vec![crate::provider::Guard::new(
+                    crate::provider::GuardKind::NoPush,
+                )];
                 assert!(!crate::guard::evaluate_guards(&actions, &guards, "/w").allow);
             }
             other => panic!("{other:?}"),
@@ -215,8 +237,11 @@ mod tests {
 
     #[test]
     fn a_command_given_as_a_string_works_too() {
-        let ev = parse_codex_line(&json!({"type":"exec_command_begin","msg":{"command":"npm test"}}));
-        assert!(matches!(&ev[0], AgentEvent::ToolPre { args, .. } if args["command"] == "npm test"));
+        let ev =
+            parse_codex_line(&json!({"type":"exec_command_begin","msg":{"command":"npm test"}}));
+        assert!(
+            matches!(&ev[0], AgentEvent::ToolPre { args, .. } if args["command"] == "npm test")
+        );
     }
 
     #[test]
@@ -229,9 +254,7 @@ mod tests {
         let paths: Vec<String> = ev
             .iter()
             .filter_map(|e| match e {
-                AgentEvent::ToolPre { args, .. } => {
-                    args["file_path"].as_str().map(String::from)
-                }
+                AgentEvent::ToolPre { args, .. } => args["file_path"].as_str().map(String::from),
                 _ => None,
             })
             .collect();
@@ -241,7 +264,9 @@ mod tests {
 
     #[test]
     fn reasoning_is_not_the_answer() {
-        assert!(parse_codex_line(&json!({"type":"agent_reasoning","msg":{"text":"hmm"}})).is_empty());
+        assert!(
+            parse_codex_line(&json!({"type":"agent_reasoning","msg":{"text":"hmm"}})).is_empty()
+        );
     }
 
     #[test]
@@ -274,9 +299,18 @@ mod tests {
             "type": "error",
             "msg": {"message": "rate limit exceeded, try again after 2026-08-03T04:00:00Z"}
         }));
-        assert!(ev.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })), "{ev:?}");
-        match ev.iter().find(|e| matches!(e, AgentEvent::RateLimited { .. })) {
-            Some(AgentEvent::RateLimited { reset_at, provider, .. }) => {
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, AgentEvent::RateLimited { .. })),
+            "{ev:?}"
+        );
+        match ev
+            .iter()
+            .find(|e| matches!(e, AgentEvent::RateLimited { .. }))
+        {
+            Some(AgentEvent::RateLimited {
+                reset_at, provider, ..
+            }) => {
                 assert_eq!(reset_at, "2026-08-03T04:00:00Z");
                 assert_eq!(provider.as_deref(), Some("codex"));
             }
@@ -287,8 +321,12 @@ mod tests {
     #[test]
     fn an_ordinary_error_is_not_mistaken_for_a_quota_problem() {
         let ev = parse_codex_line(&json!({"type":"error","msg":{"message":"compile failed"}}));
-        assert!(!ev.iter().any(|e| matches!(e, AgentEvent::RateLimited { .. })));
-        assert!(matches!(&ev[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error"));
+        assert!(!ev
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RateLimited { .. })));
+        assert!(
+            matches!(&ev[0], AgentEvent::Error { code: Some(c), .. } if c == "provider.stream_error")
+        );
     }
 
     #[test]

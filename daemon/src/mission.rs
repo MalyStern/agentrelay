@@ -117,14 +117,22 @@ pub async fn run_turn_supervised(
             }
             // Healthy heartbeat: record where the wall is and carry on. Acting on it
             // would abort a turn that has nothing wrong with it.
-            AgentEvent::QuotaHint { reset_at, window, provider } => {
+            AgentEvent::QuotaHint {
+                reset_at,
+                window,
+                provider,
+            } => {
                 let _ = store.save_quota_snapshot(
                     provider.as_deref().unwrap_or("claude"),
-                    &window.map(|w| format!("{w:?}")).unwrap_or_else(|| "unknown".into()),
+                    &window
+                        .map(|w| format!("{w:?}"))
+                        .unwrap_or_else(|| "unknown".into()),
                     reset_at,
                 );
             }
-            AgentEvent::RateLimited { reset_at, provider, .. } => {
+            AgentEvent::RateLimited {
+                reset_at, provider, ..
+            } => {
                 // A rate-limit message does not always carry the reset time — and
                 // when it doesn't, the planner falls back to a fixed guess. But the
                 // provider told us where the wall was on every healthy turn before
@@ -150,29 +158,54 @@ pub async fn run_turn_supervised(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{Usage, QuotaWindow};
+    use crate::events::{QuotaWindow, Usage};
     use crate::fake_adapter::FakeAdapter;
     use crate::provider::GuardKind;
     use serde_json::json;
 
     fn handle() -> SessionHandle {
-        SessionHandle { id: "s".into(), external_id: None, provider: "fake".into(), cwd: "/home/u/proj".into() }
+        SessionHandle {
+            id: "s".into(),
+            external_id: None,
+            provider: "fake".into(),
+            cwd: "/home/u/proj".into(),
+        }
     }
     fn usage() -> Usage {
-        Usage { input_tokens: 100, output_tokens: 40, ..Usage::zero() }
+        Usage {
+            input_tokens: 100,
+            output_tokens: 40,
+            ..Usage::zero()
+        }
     }
 
     #[tokio::test]
     async fn clean_turn_completes_accumulates_and_logs() {
         let turn = vec![
             AgentEvent::TurnStarted,
-            AgentEvent::ToolPre { tool: "Bash".into(), args: json!({"command": "npm test"}) },
+            AgentEvent::ToolPre {
+                tool: "Bash".into(),
+                args: json!({"command": "npm test"}),
+            },
             AgentEvent::TurnCompleted { usage: usage() },
         ];
         let fake = FakeAdapter::new("fake", vec![turn]);
         let store = Store::open_in_memory().unwrap();
-        let guards = vec![Guard::new(GuardKind::NoPush), Guard::new(GuardKind::WorkspaceBoundary)];
-        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &guards, &store, "m1", "2026-07-27T21:00:00Z").await.unwrap();
+        let guards = vec![
+            Guard::new(GuardKind::NoPush),
+            Guard::new(GuardKind::WorkspaceBoundary),
+        ];
+        let out = run_turn_supervised(
+            &fake,
+            &handle(),
+            TurnInput::default(),
+            &guards,
+            &store,
+            "m1",
+            "2026-07-27T21:00:00Z",
+        )
+        .await
+        .unwrap();
         assert!(out.completed);
         assert!(!out.interrupted);
         assert!(out.violations.is_empty());
@@ -185,18 +218,35 @@ mod tests {
     async fn guard_violation_interrupts_the_turn() {
         let turn = vec![
             AgentEvent::TurnStarted,
-            AgentEvent::ToolPre { tool: "Write".into(), args: json!({"file_path": "/etc/passwd"}) },
+            AgentEvent::ToolPre {
+                tool: "Write".into(),
+                args: json!({"file_path": "/etc/passwd"}),
+            },
             AgentEvent::TurnCompleted { usage: usage() }, // should never be reached
         ];
         let fake = FakeAdapter::new("fake", vec![turn]);
         let store = Store::open_in_memory().unwrap();
         let guards = vec![Guard::new(GuardKind::WorkspaceBoundary)];
-        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &guards, &store, "m1", "2026-07-27T21:00:00Z").await.unwrap();
+        let out = run_turn_supervised(
+            &fake,
+            &handle(),
+            TurnInput::default(),
+            &guards,
+            &store,
+            "m1",
+            "2026-07-27T21:00:00Z",
+        )
+        .await
+        .unwrap();
         assert!(out.interrupted);
         assert!(!out.completed);
         assert_eq!(out.violations.len(), 1);
         assert_eq!(out.violations[0].guard, GuardKind::WorkspaceBoundary);
-        assert_eq!(fake.interrupt_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            fake.interrupt_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 
     #[tokio::test]
@@ -214,7 +264,17 @@ mod tests {
         ];
         let fake = FakeAdapter::new("fake", vec![turn]);
         let store = Store::open_in_memory().unwrap();
-        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &[], &store, "m1", "2026-08-02T00:00:00Z").await.unwrap();
+        let out = run_turn_supervised(
+            &fake,
+            &handle(),
+            TurnInput::default(),
+            &[],
+            &store,
+            "m1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await
+        .unwrap();
 
         assert!(out.completed, "the turn must run to completion");
         assert!(out.resume_plan.is_none(), "a hint is not a rate limit");
@@ -244,23 +304,55 @@ mod tests {
             },
         ];
         let fake = FakeAdapter::new("fake", vec![turn]);
-        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &[], &store, "m1", "2026-08-02T03:00:00Z").await.unwrap();
+        let out = run_turn_supervised(
+            &fake,
+            &handle(),
+            TurnInput::default(),
+            &[],
+            &store,
+            "m1",
+            "2026-08-02T03:00:00Z",
+        )
+        .await
+        .unwrap();
 
         let plan = out.resume_plan.expect("a rate limit must produce a plan");
-        assert!(plan.resume_at_utc.starts_with("2026-08-02T04:01"), "{}", plan.resume_at_utc);
+        assert!(
+            plan.resume_at_utc.starts_with("2026-08-02T04:01"),
+            "{}",
+            plan.resume_at_utc
+        );
         // An hour away, not the conservative default.
-        assert!(plan.wait_ms > 59 * 60_000 && plan.wait_ms < 62 * 60_000, "{}", plan.wait_ms);
+        assert!(
+            plan.wait_ms > 59 * 60_000 && plan.wait_ms < 62 * 60_000,
+            "{}",
+            plan.wait_ms
+        );
     }
 
     #[tokio::test]
     async fn rate_limit_produces_a_resume_plan() {
         let turn = vec![
             AgentEvent::TurnStarted,
-            AgentEvent::RateLimited { reset_at: "2026-07-27T22:00:00.000Z".into(), window: Some(QuotaWindow::FiveHour), provider: None },
+            AgentEvent::RateLimited {
+                reset_at: "2026-07-27T22:00:00.000Z".into(),
+                window: Some(QuotaWindow::FiveHour),
+                provider: None,
+            },
         ];
         let fake = FakeAdapter::new("fake", vec![turn]);
         let store = Store::open_in_memory().unwrap();
-        let out = run_turn_supervised(&fake, &handle(), TurnInput::default(), &[], &store, "m1", "2026-07-27T21:00:00.000Z").await.unwrap();
+        let out = run_turn_supervised(
+            &fake,
+            &handle(),
+            TurnInput::default(),
+            &[],
+            &store,
+            "m1",
+            "2026-07-27T21:00:00.000Z",
+        )
+        .await
+        .unwrap();
         let plan = out.resume_plan.expect("resume plan");
         assert!(plan.wait_ms > 0);
         assert!(!out.completed);

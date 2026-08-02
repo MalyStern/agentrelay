@@ -196,7 +196,11 @@ impl Daemon {
 
         let store = Store::open(Self::db_path(&root).to_str().unwrap())
             .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
-        Ok(Daemon { root, store, config })
+        Ok(Daemon {
+            root,
+            store,
+            config,
+        })
     }
 
     /// Open an existing workspace (or fall back to defaults if config is missing).
@@ -216,20 +220,26 @@ impl Daemon {
             // Notepad and PowerShell's `Set-Content -Encoding utf8` both prepend a
             // UTF-8 BOM, which serde rejects — on Windows that is the *normal* way a
             // user edits this file, so strip it rather than blame them.
-            Ok(s) => serde_json::from_str(s.strip_prefix('\u{feff}').unwrap_or(&s)).map_err(|e| {
-                AgentRelayError::new(
-                    ErrorCode::Internal,
-                    format!(
-                        "{} is not valid config: {e}\nFix it (or delete it to use defaults) — \
+            Ok(s) => {
+                serde_json::from_str(s.strip_prefix('\u{feff}').unwrap_or(&s)).map_err(|e| {
+                    AgentRelayError::new(
+                        ErrorCode::Internal,
+                        format!(
+                            "{} is not valid config: {e}\nFix it (or delete it to use defaults) — \
                          refusing to run with guards silently disabled.",
-                        Self::config_path(&root).display()
-                    ),
-                )
-            })?,
+                            Self::config_path(&root).display()
+                        ),
+                    )
+                })?
+            }
         };
         let store = Store::open(Self::db_path(&root).to_str().unwrap())
             .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
-        Ok(Daemon { root, store, config })
+        Ok(Daemon {
+            root,
+            store,
+            config,
+        })
     }
 
     pub fn config(&self) -> &Config {
@@ -512,7 +522,11 @@ impl Daemon {
     /// The completion gate (Watchtower layer-2): run the config's validators in
     /// `cwd`, persist each result, and return the results plus whether ALL passed.
     /// A unit is "done" only on system evidence, never the model's word.
-    pub async fn run_validators(&self, work_unit_id: &str, cwd: &str) -> Vec<crate::validator::ValidationResult> {
+    pub async fn run_validators(
+        &self,
+        work_unit_id: &str,
+        cwd: &str,
+    ) -> Vec<crate::validator::ValidationResult> {
         let results = crate::validator::run_all(&self.config.validators, cwd).await;
         for r in &results {
             let _ = self.store.save_validation(work_unit_id, r);
@@ -556,7 +570,11 @@ impl Daemon {
 
             match decision {
                 crate::fixloop::LoopDecision::Done => {
-                    return FixLoopOutcome { green: true, attempts: attempt, gave_up: None }
+                    return FixLoopOutcome {
+                        green: true,
+                        attempts: attempt,
+                        gave_up: None,
+                    }
                 }
                 crate::fixloop::LoopDecision::GiveUp { reason } => {
                     let _ = self.store.append_event(&crate::store::AppendEvent {
@@ -568,18 +586,37 @@ impl Daemon {
                     });
                     // A person has to look now. Say so in the state, so nothing
                     // downstream mistakes this for work still in progress.
-                    let _ = self.transition(mission_id, crate::state::MissionState::WaitingInput, &reason);
-                    return FixLoopOutcome { green: false, attempts: attempt, gave_up: Some(reason) };
+                    let _ = self.transition(
+                        mission_id,
+                        crate::state::MissionState::WaitingInput,
+                        &reason,
+                    );
+                    return FixLoopOutcome {
+                        green: false,
+                        attempts: attempt,
+                        gave_up: Some(reason),
+                    };
                 }
-                crate::fixloop::LoopDecision::Retry { attempt: next, prompt } => {
+                crate::fixloop::LoopDecision::Retry {
+                    attempt: next,
+                    prompt,
+                } => {
                     previous = rounds.last().cloned();
                     attempt = next;
                     if let Err(e) = self.run_turn(mission_id, &prompt, cwd).await {
                         // The turn itself could not run (budget, isolation, no
                         // agent). That is not something more attempts will fix.
                         let reason = format!("could not run a fix attempt: {e}");
-                        let _ = self.transition(mission_id, crate::state::MissionState::WaitingInput, &reason);
-                        return FixLoopOutcome { green: false, attempts: attempt, gave_up: Some(reason) };
+                        let _ = self.transition(
+                            mission_id,
+                            crate::state::MissionState::WaitingInput,
+                            &reason,
+                        );
+                        return FixLoopOutcome {
+                            green: false,
+                            attempts: attempt,
+                            gave_up: Some(reason),
+                        };
                     }
                 }
             }
@@ -606,9 +643,8 @@ impl Daemon {
         reason: &str,
     ) -> Result<crate::state::MissionState> {
         let from = self.mission_state(mission_id);
-        crate::state::check(from, to).map_err(|e| {
-            AgentRelayError::new(ErrorCode::Internal, e.to_string())
-        })?;
+        crate::state::check(from, to)
+            .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
         if from != to {
             self.store
                 .record_transition(mission_id, Some(from.as_str()), to.as_str(), Some(reason))
@@ -624,7 +660,11 @@ impl Daemon {
     /// turns. Being interrupted mid-unit is the expensive case — half-finished,
     /// unvalidated, uncheckpointed work, and a fresh session that has lost the
     /// context needed to continue it.
-    pub fn should_start_unit(&self, estimated_ms: i64, now_utc: &str) -> crate::quota::StartDecision {
+    pub fn should_start_unit(
+        &self,
+        estimated_ms: i64,
+        now_utc: &str,
+    ) -> crate::quota::StartDecision {
         let reset = self.store.latest_quota_reset(&self.config.program);
         crate::quota::decide_start(reset.as_deref(), now_utc, estimated_ms, None)
     }
@@ -643,7 +683,13 @@ impl Daemon {
         Ok(existing)
     }
 
-    pub async fn complete_unit(&self, mission_id: &str, unit_id: &str, cwd: &str, summary: &str) -> UnitOutcome {
+    pub async fn complete_unit(
+        &self,
+        mission_id: &str,
+        unit_id: &str,
+        cwd: &str,
+        summary: &str,
+    ) -> UnitOutcome {
         let validations = self.run_validators(unit_id, cwd).await;
         let gate_passed = crate::validator::all_passed(&validations);
 
@@ -732,7 +778,13 @@ impl Daemon {
                         summary: Some(summary.to_string()),
                     });
                 }
-                UnitOutcome { validations, gate_passed, checkpoint: Some(cp), checkpoint_error: None, left_alone }
+                UnitOutcome {
+                    validations,
+                    gate_passed,
+                    checkpoint: Some(cp),
+                    checkpoint_error: None,
+                    left_alone,
+                }
             }
             // A repo we can't checkpoint (not a repo, git missing) must not be
             // reported as a failed unit — the work passed; only the safety net is
@@ -820,7 +872,8 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let d = std::env::temp_dir().join(format!("agentrelay-daemon-{}-{}", std::process::id(), n));
+        let d =
+            std::env::temp_dir().join(format!("agentrelay-daemon-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -914,12 +967,25 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let p = root.to_str().unwrap().to_string();
         let g = |args: &[&str]| {
-            std::process::Command::new("git").args(args).current_dir(&p).output().unwrap()
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&p)
+                .output()
+                .unwrap()
         };
         g(&["init", "-q", "-b", "main"]);
         std::fs::write(root.join("seed.txt"), "seed\n").unwrap();
         g(&["add", "-A"]);
-        g(&["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "base"]);
+        g(&[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@e.com",
+            "commit",
+            "-q",
+            "-m",
+            "base",
+        ]);
         (root, p)
     }
 
@@ -937,20 +1003,32 @@ mod tests {
         // The supervisor notes the tree BEFORE the agent starts, so it can tell the
         // agent's output from the user's own uncommitted work.
         let baseline = d.begin_unit("m1", "u1", &cwd).unwrap();
-        assert!(!baseline.is_empty(), "init leaves its own files uncommitted");
+        assert!(
+            !baseline.is_empty(),
+            "init leaves its own files uncommitted"
+        );
 
         // The agent changed something and the validators pass -> committed.
         std::fs::write(root.join("work.txt"), "the agent's output\n").unwrap();
-        let out = d.complete_unit("m1", "u1", &cwd, "unit 1: add work.txt").await;
+        let out = d
+            .complete_unit("m1", "u1", &cwd, "unit 1: add work.txt")
+            .await;
         assert!(out.gate_passed);
-        let cp = out.checkpoint.clone().unwrap_or_else(|| panic!("no checkpoint; err={:?} left_alone={:?}", out.checkpoint_error, out.left_alone));
+        let cp = out.checkpoint.clone().unwrap_or_else(|| {
+            panic!(
+                "no checkpoint; err={:?} left_alone={:?}",
+                out.checkpoint_error, out.left_alone
+            )
+        });
         assert!(cp.created);
         assert!(crate::checkpoint::is_ours(&cwd, &cp.head));
         // The tree is deliberately NOT clean: what was already uncommitted before
         // the unit began stays that way, and is reported rather than swept up.
         assert_eq!(cp.files_changed, 1, "only the agent's file");
         assert_eq!(out.left_alone, baseline);
-        assert!(crate::checkpoint::dirty_paths(&cwd).unwrap().contains(&baseline[0]));
+        assert!(crate::checkpoint::dirty_paths(&cwd)
+            .unwrap()
+            .contains(&baseline[0]));
         // Our own database must never end up in the user's history.
         let tracked = std::process::Command::new("git")
             .args(["ls-files"])
@@ -958,9 +1036,18 @@ mod tests {
             .output()
             .unwrap();
         let tracked = String::from_utf8_lossy(&tracked.stdout);
-        assert!(tracked.contains("work.txt"), "the agent's work is committed");
-        assert!(!tracked.contains("agentrelay.db"), "our database is not: {tracked}");
-        assert_eq!(d.store().latest_checkpoint("m1").unwrap().unwrap().git_head, Some(cp.head));
+        assert!(
+            tracked.contains("work.txt"),
+            "the agent's work is committed"
+        );
+        assert!(
+            !tracked.contains("agentrelay.db"),
+            "our database is not: {tracked}"
+        );
+        assert_eq!(
+            d.store().latest_checkpoint("m1").unwrap().unwrap().git_head,
+            Some(cp.head)
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -982,14 +1069,25 @@ mod tests {
         let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
 
         assert!(!out.gate_passed);
-        assert!(out.checkpoint.is_none(), "broken work must never become a restore point");
+        assert!(
+            out.checkpoint.is_none(),
+            "broken work must never become a restore point"
+        );
 
         // …and the morning report must SAY it failed. The bug this pins: without a
         // work-unit row the report saw no units and reported the night as clean.
         let report = d.morning_report("m1", &cwd);
         assert_eq!(report.units_failed, 1, "{}", report.render());
-        assert!(report.headline().contains("FAILED"), "{}", report.headline());
-        assert_eq!(crate::checkpoint::head(&cwd).unwrap(), before, "HEAD must not move");
+        assert!(
+            report.headline().contains("FAILED"),
+            "{}",
+            report.headline()
+        );
+        assert_eq!(
+            crate::checkpoint::head(&cwd).unwrap(),
+            before,
+            "HEAD must not move"
+        );
         // The work itself is untouched — visible in the tree for the human to judge.
         assert!(root.join("broken.txt").exists());
         assert!(!crate::checkpoint::is_clean(&cwd).unwrap());
@@ -1019,7 +1117,10 @@ mod tests {
             let mut book = d.receipt_book("m1");
             assert_eq!(book.len(), 1, "the receipt was persisted");
             let again = d.observe_read(&mut book, "m1", "src/big.rs", &big, 1);
-            assert!(!again.should_send(), "unchanged file: 40 KB not spent again");
+            assert!(
+                !again.should_send(),
+                "unchanged file: 40 KB not spent again"
+            );
             assert_eq!(book.saved_bytes, 40_000);
             // The saving is counted at the moment of the skip, so the morning
             // report can state it without inferring — and it survives the restart.
@@ -1047,15 +1148,25 @@ mod tests {
         let d = Daemon::open(&root).unwrap();
 
         // Three hours of the user's own work, uncommitted.
-        std::fs::write(root.join("seed.txt"), "my novel, chapter one, much improved\n").unwrap();
+        std::fs::write(
+            root.join("seed.txt"),
+            "my novel, chapter one, much improved\n",
+        )
+        .unwrap();
         d.begin_unit("m1", "u1", &cwd).unwrap();
 
         // The agent does something unrelated.
         std::fs::write(root.join("agent.txt"), "agent output\n").unwrap();
         let out = d.complete_unit("m1", "u1", &cwd, "unit 1").await;
 
-        let cp = out.checkpoint.expect("the agent's work is still checkpointed");
-        assert!(out.left_alone.contains(&"seed.txt".to_string()), "{:?}", out.left_alone);
+        let cp = out
+            .checkpoint
+            .expect("the agent's work is still checkpointed");
+        assert!(
+            out.left_alone.contains(&"seed.txt".to_string()),
+            "{:?}",
+            out.left_alone
+        );
 
         let committed = std::process::Command::new("git")
             .args(["show", "--stat", "--name-only", "--format=", &cp.head])
@@ -1064,7 +1175,10 @@ mod tests {
             .unwrap();
         let committed = String::from_utf8_lossy(&committed.stdout);
         assert!(committed.contains("agent.txt"), "{committed}");
-        assert!(!committed.contains("seed.txt"), "the user's file was swept in: {committed}");
+        assert!(
+            !committed.contains("seed.txt"),
+            "the user's file was swept in: {committed}"
+        );
 
         // And the undo we advertise really is safe to run now.
         // Run the exact command the CLI prints, and check the user's work survives.
@@ -1076,7 +1190,10 @@ mod tests {
             .output()
             .unwrap();
         let novel = std::fs::read_to_string(root.join("seed.txt")).unwrap();
-        assert!(novel.contains("much improved"), "undo destroyed the user's work: {novel}");
+        assert!(
+            novel.contains("much improved"),
+            "undo destroyed the user's work: {novel}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1098,7 +1215,10 @@ mod tests {
         assert!(out.gate_passed, "the validators still ran and passed");
         assert!(out.checkpoint.is_none());
         let err = out.checkpoint_error.unwrap();
-        assert!(err.contains("cannot tell your work from the agent's"), "{err}");
+        assert!(
+            err.contains("cannot tell your work from the agent's"),
+            "{err}"
+        );
         assert!(err.contains("Nothing was touched"), "{err}");
         assert_eq!(crate::checkpoint::head(&cwd).unwrap(), before);
         let _ = std::fs::remove_dir_all(&root);
@@ -1122,7 +1242,11 @@ mod tests {
         d.store().add_cost_usd("m1", 0.60).unwrap();
         d.store().note_turn_cost_usd("m1", 0.60).unwrap();
         match d.check_budget("m1") {
-            crate::cost::BudgetVerdict::Stop { spent_usd, cap_usd, reason } => {
+            crate::cost::BudgetVerdict::Stop {
+                spent_usd,
+                cap_usd,
+                reason,
+            } => {
                 assert!((spent_usd - 0.60).abs() < 1e-9);
                 assert!((cap_usd - 1.00).abs() < 1e-9);
                 assert!(reason.contains("would pass"), "{reason}");
@@ -1157,7 +1281,11 @@ mod tests {
         Daemon::init(&root).unwrap();
         let d = Daemon::open(&root).unwrap();
         assert!(!d.config().budget.is_set());
-        assert!(d.status().budget.contains("No spending cap is set"), "{}", d.status().budget);
+        assert!(
+            d.status().budget.contains("No spending cap is set"),
+            "{}",
+            d.status().budget
+        );
         assert!(d.check_budget("m1").may_proceed());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1177,11 +1305,22 @@ mod tests {
 
         // A fresh process — the crash-restart case — must not pick it back up.
         let d = Daemon::open(&root).unwrap();
-        assert_eq!(d.mission_state("m1"), Stopped, "the state survived the restart");
-        let err = d.transition("m1", Running, "resuming after restart").unwrap_err().to_string();
+        assert_eq!(
+            d.mission_state("m1"),
+            Stopped,
+            "the state survived the restart"
+        );
+        let err = d
+            .transition("m1", Running, "resuming after restart")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("final"), "{err}");
         assert!(err.contains("start a new mission"), "{err}");
-        assert_eq!(d.mission_state("m1"), Stopped, "and the refusal did not move it");
+        assert_eq!(
+            d.mission_state("m1"),
+            Stopped,
+            "and the refusal did not move it"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1196,7 +1335,11 @@ mod tests {
 
         // Straight to `stopped` would claim processes were killed when nothing was.
         assert!(d.transition("m1", Stopped, "shortcut").is_err());
-        assert_eq!(d.mission_state("m1"), Running, "state unchanged by a refusal");
+        assert_eq!(
+            d.mission_state("m1"),
+            Running,
+            "state unchanged by a refusal"
+        );
 
         // The legal route works and is recorded.
         d.transition("m1", Stopping, "stop requested").unwrap();
@@ -1245,13 +1388,22 @@ mod tests {
 
         // Drift does NOT block: the work still passed and was still checkpointed.
         assert!(out.gate_passed);
-        assert!(out.checkpoint.is_some(), "drift must not stop a passing unit");
+        assert!(
+            out.checkpoint.is_some(),
+            "drift must not stop a passing unit"
+        );
 
         let report = d.morning_report("m1", &cwd).render();
         assert!(report.contains("possible drift"), "{report}");
         assert!(report.contains("deploy.sh"), "and names the file: {report}");
-        assert!(report.contains("[ESTIMATED]"), "labelled a guess, not evidence: {report}");
-        assert!(!report.contains("asked_for.rs"), "in-scope work is not flagged: {report}");
+        assert!(
+            report.contains("[ESTIMATED]"),
+            "labelled a guess, not evidence: {report}"
+        );
+        assert!(
+            !report.contains("asked_for.rs"),
+            "in-scope work is not flagged: {report}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1288,13 +1440,17 @@ mod tests {
         )
         .unwrap();
         let d = Daemon::open(&root).unwrap();
-        d.transition("m1", crate::state::MissionState::Running, "night started").unwrap();
+        d.transition("m1", crate::state::MissionState::Running, "night started")
+            .unwrap();
 
         let out = d.fix_until_green("m1", "u1", &cwd).await;
         assert!(!out.green);
         assert!(out.gave_up.is_some(), "it must stop, not spin");
         // And the state says a person is needed — not "still working".
-        assert_eq!(d.mission_state("m1"), crate::state::MissionState::WaitingInput);
+        assert_eq!(
+            d.mission_state("m1"),
+            crate::state::MissionState::WaitingInput
+        );
         assert!(d.status().waiting_for_you);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1309,11 +1465,19 @@ mod tests {
         let d = Daemon::open(&root).unwrap();
 
         assert!(!d.blocking_hook_installed(), "nothing installed yet");
-        assert!(d.status().blocking.contains("ADVISORY"), "{}", d.status().blocking);
+        assert!(
+            d.status().blocking.contains("ADVISORY"),
+            "{}",
+            d.status().blocking
+        );
 
         assert_eq!(d.ensure_blocking_hook(), BlockingHook::JustInstalled);
         assert!(d.blocking_hook_installed(), "now armed");
-        assert!(d.status().blocking.contains("BLOCK"), "{}", d.status().blocking);
+        assert!(
+            d.status().blocking.contains("BLOCK"),
+            "{}",
+            d.status().blocking
+        );
 
         // Idempotent — a second run does not pile up a duplicate.
         assert_eq!(d.ensure_blocking_hook(), BlockingHook::AlreadyActive);
@@ -1346,8 +1510,15 @@ mod tests {
         }
         // The file is untouched — not overwritten with our hook.
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), broken);
-        assert!(!d.blocking_hook_installed(), "cannot claim installed on an unreadable file");
-        assert!(d.status().blocking.contains("UNKNOWN"), "{}", d.status().blocking);
+        assert!(
+            !d.blocking_hook_installed(),
+            "cannot claim installed on an unreadable file"
+        );
+        assert!(
+            d.status().blocking.contains("UNKNOWN"),
+            "{}",
+            d.status().blocking
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1359,7 +1530,10 @@ mod tests {
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         let settings = root.join(".claude").join("settings.json");
         std::fs::write(&settings, "[1, 2, 3]").unwrap(); // valid JSON, wrong shape
-        assert!(matches!(d.ensure_blocking_hook(), crate::daemon::BlockingHook::Failed(_)));
+        assert!(matches!(
+            d.ensure_blocking_hook(),
+            crate::daemon::BlockingHook::Failed(_)
+        ));
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), "[1, 2, 3]");
         // merge itself refuses a non-object root rather than discarding it.
         assert!(crate::hook::merge_hook_settings(&serde_json::json!([1, 2]), "x").is_none());
@@ -1405,7 +1579,10 @@ mod tests {
         // notify_report maps needs_attention -> Urgency::Attention. We assert the
         // mapping indirectly: an unverified-only report is attention-worthy, and the
         // old code (units_failed > 0) would have called it quiet.
-        assert_eq!(r.units_failed, 0, "so the old check would have said 'quiet'");
+        assert_eq!(
+            r.units_failed, 0,
+            "so the old check would have said 'quiet'"
+        );
     }
 
     #[test]
@@ -1416,11 +1593,14 @@ mod tests {
         Daemon::init(&root).unwrap();
         let d = Daemon::open(&root).unwrap();
         assert!(!d.config().notify.is_enabled());
-        assert!(d.status().notifications.contains("Nothing leaves this machine"));
+        assert!(d
+            .status()
+            .notifications
+            .contains("Nothing leaves this machine"));
 
         // With notifications off, asking to notify sends nothing and says so.
         let r = d.morning_report("m1", root.to_str().unwrap());
-        assert_eq!(d.notify_report(&r).unwrap(), false);
+        assert!(!d.notify_report(&r).unwrap());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1485,11 +1665,23 @@ mod tests {
         let d = Daemon::init(&root).unwrap();
         let turn = vec![
             AgentEvent::TurnStarted,
-            AgentEvent::ToolPre { tool: "Bash".into(), args: json!({"command":"npm test"}) },
-            AgentEvent::TurnCompleted { usage: Usage { input_tokens: 10, output_tokens: 5, ..Usage::zero() } },
+            AgentEvent::ToolPre {
+                tool: "Bash".into(),
+                args: json!({"command":"npm test"}),
+            },
+            AgentEvent::TurnCompleted {
+                usage: Usage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    ..Usage::zero()
+                },
+            },
         ];
         let fake = FakeAdapter::new("fake", vec![turn]);
-        let out = d.run_turn_with(&fake, "m1", "do the thing", ".").await.unwrap();
+        let out = d
+            .run_turn_with(&fake, "m1", "do the thing", ".")
+            .await
+            .unwrap();
         assert!(out.completed);
         assert!(out.violations.is_empty());
         assert_eq!(d.store().get_events("m1").unwrap().len(), 3);

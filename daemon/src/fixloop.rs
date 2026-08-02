@@ -40,7 +40,10 @@ fn default_true() -> bool {
 
 impl Default for FixLoopConfig {
     fn default() -> Self {
-        FixLoopConfig { max_attempts: default_max_attempts(), stop_when_stuck: true }
+        FixLoopConfig {
+            max_attempts: default_max_attempts(),
+            stop_when_stuck: true,
+        }
     }
 }
 
@@ -100,7 +103,14 @@ pub fn build_fix_prompt(results: &[ValidationResult]) -> String {
         // The tail carries the summary and the failing assertion; the head is
         // usually a banner.
         let lines: Vec<&str> = r.output.lines().collect();
-        let tail = lines.iter().rev().take(40).rev().copied().collect::<Vec<_>>().join("\n");
+        let tail = lines
+            .iter()
+            .rev()
+            .take(40)
+            .rev()
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
         p.push_str(&tail);
         p.push_str("\n\n");
     }
@@ -158,7 +168,10 @@ pub fn decide(
         };
     }
 
-    LoopDecision::Retry { attempt: attempt + 1, prompt: build_fix_prompt(results) }
+    LoopDecision::Retry {
+        attempt: attempt + 1,
+        prompt: build_fix_prompt(results),
+    }
 }
 
 #[cfg(test)]
@@ -176,7 +189,12 @@ mod tests {
 
     #[test]
     fn a_green_round_ends_the_loop() {
-        let d = decide(&FixLoopConfig::default(), &[r("tests", true, "ok")], 1, None);
+        let d = decide(
+            &FixLoopConfig::default(),
+            &[r("tests", true, "ok")],
+            1,
+            None,
+        );
         assert_eq!(d, LoopDecision::Done);
     }
 
@@ -191,7 +209,11 @@ mod tests {
 
     #[test]
     fn a_failure_produces_a_prompt_carrying_the_actual_output() {
-        let results = [r("tests", false, "PASS a\nPASS b\nFAIL src/x.ts > it works\nExpected 4, got 5")];
+        let results = [r(
+            "tests",
+            false,
+            "PASS a\nPASS b\nFAIL src/x.ts > it works\nExpected 4, got 5",
+        )];
         match decide(&FixLoopConfig::default(), &results, 1, None) {
             LoopDecision::Retry { attempt, prompt } => {
                 assert_eq!(attempt, 2);
@@ -210,7 +232,11 @@ mod tests {
     fn the_same_failure_twice_stops_immediately() {
         // The real signal that an agent is stuck. Waiting for the attempt cap here
         // would spend two more turns learning what we already know.
-        let results = [r("tests", false, "FAIL src/x.ts > it works\nExpected 4, got 5")];
+        let results = [r(
+            "tests",
+            false,
+            "FAIL src/x.ts > it works\nExpected 4, got 5",
+        )];
         let sig = failure_signature(&results);
         match decide(&FixLoopConfig::default(), &results, 1, Some(&sig)) {
             LoopDecision::GiveUp { reason } => {
@@ -251,9 +277,15 @@ mod tests {
 
     #[test]
     fn the_attempt_cap_bounds_a_problem_that_cannot_be_fixed_from_here() {
-        let cfg = FixLoopConfig { max_attempts: 3, stop_when_stuck: false };
+        let cfg = FixLoopConfig {
+            max_attempts: 3,
+            stop_when_stuck: false,
+        };
         let results = [r("tests", false, "FAIL something")];
-        assert!(matches!(decide(&cfg, &results, 2, None), LoopDecision::Retry { .. }));
+        assert!(matches!(
+            decide(&cfg, &results, 2, None),
+            LoopDecision::Retry { .. }
+        ));
         match decide(&cfg, &results, 3, None) {
             LoopDecision::GiveUp { reason } => {
                 assert!(reason.contains("3 fix attempts"), "{reason}");
@@ -273,7 +305,10 @@ mod tests {
     #[test]
     fn config_defaults_are_conservative_and_round_trip() {
         let d = FixLoopConfig::default();
-        assert_eq!(d.max_attempts, 3, "a night should not be spent on one problem");
+        assert_eq!(
+            d.max_attempts, 3,
+            "a night should not be spent on one problem"
+        );
         assert!(d.stop_when_stuck);
         let json = serde_json::to_string(&d).unwrap();
         assert_eq!(serde_json::from_str::<FixLoopConfig>(&json).unwrap(), d);

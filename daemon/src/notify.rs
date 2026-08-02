@@ -53,15 +53,21 @@ pub struct Notification {
 
 impl Notification {
     pub fn new(title: impl Into<String>, headline: impl Into<String>, urgency: Urgency) -> Self {
-        Notification { title: title.into(), headline: headline.into(), urgency }
+        Notification {
+            title: title.into(),
+            headline: headline.into(),
+            urgency,
+        }
     }
 }
 
 /// Where notifications go. `None` — the default — means nowhere.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum NotifyConfig {
     /// Explicit "do not send anything". The default.
+    #[default]
     None,
     Ntfy {
         /// Your topic. Anyone who knows a public ntfy topic can read it, so this
@@ -76,12 +82,6 @@ pub enum NotifyConfig {
 
 fn default_ntfy_server() -> String {
     "https://ntfy.sh".to_string()
-}
-
-impl Default for NotifyConfig {
-    fn default() -> Self {
-        NotifyConfig::None
-    }
 }
 
 impl NotifyConfig {
@@ -156,7 +156,10 @@ pub struct NtfyNotifier {
 
 impl NtfyNotifier {
     pub fn new(server: impl Into<String>, topic: impl Into<String>) -> Self {
-        NtfyNotifier { server: server.into(), topic: topic.into() }
+        NtfyNotifier {
+            server: server.into(),
+            topic: topic.into(),
+        }
     }
 
     pub fn url(&self) -> String {
@@ -194,7 +197,10 @@ impl Notifier for NtfyNotifier {
 /// HTTP headers cannot contain newlines; a title carrying one would either be
 /// rejected or, worse, allow extra headers to be injected into the request.
 fn sanitize_header(s: &str) -> String {
-    s.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).take(200).collect()
+    s.chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .take(200)
+        .collect()
 }
 
 /// Build the configured notifier. Returns `NullNotifier` when notifications are off.
@@ -251,7 +257,9 @@ mod tests {
         // The default must be silence: this is the only network path in the daemon.
         let cfg = NotifyConfig::default();
         assert!(!cfg.is_enabled());
-        assert!(cfg.describe_privacy().contains("Nothing leaves this machine"));
+        assert!(cfg
+            .describe_privacy()
+            .contains("Nothing leaves this machine"));
         assert_eq!(from_config(&cfg).describe(), "disabled");
     }
 
@@ -269,7 +277,10 @@ mod tests {
         assert!(d.contains("anyone who guesses your topic"), "{d}");
 
         // Self-hosted: the third-party warning is not applicable and must not appear.
-        let mine = NotifyConfig::Ntfy { topic: "t".into(), server: "https://ntfy.example.dev".into() };
+        let mine = NotifyConfig::Ntfy {
+            topic: "t".into(),
+            server: "https://ntfy.example.dev".into(),
+        };
         assert!(!mine.describe_privacy().contains("public server"));
     }
 
@@ -286,20 +297,40 @@ mod tests {
 
         // HTTP header names are case-insensitive and ureq sends them lowercased,
         // so the assertions match the way the protocol actually works.
-        let raw = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().to_lowercase();
-        assert!(raw.starts_with("post /topic123 "), "got: {}", &raw[..40.min(raw.len())]);
+        let raw = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .to_lowercase();
+        assert!(
+            raw.starts_with("post /topic123 "),
+            "got: {}",
+            &raw[..40.min(raw.len())]
+        );
         assert!(raw.contains("title: agentrelay"), "RAW>>>{raw}<<<");
-        assert!(raw.contains("priority: high"), "a failure has to buzz the phone: {raw}");
-        assert!(raw.ends_with("2 unit(s) done, 1 failed"), "the body is the headline: {raw}");
+        assert!(
+            raw.contains("priority: high"),
+            "a failure has to buzz the phone: {raw}"
+        );
+        assert!(
+            raw.ends_with("2 unit(s) done, 1 failed"),
+            "the body is the headline: {raw}"
+        );
     }
 
     #[test]
     fn a_quiet_night_does_not_buzz_the_phone() {
         let (base, rx) = capture_one_request();
         NtfyNotifier::new(&base, "t")
-            .send(&Notification::new("AgentRelay", "3 unit(s) done", Urgency::Quiet))
+            .send(&Notification::new(
+                "AgentRelay",
+                "3 unit(s) done",
+                Urgency::Quiet,
+            ))
             .unwrap();
-        let raw = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().to_lowercase();
+        let raw = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .to_lowercase();
         assert!(raw.contains("priority: low"), "{raw}");
     }
 
@@ -313,7 +344,10 @@ mod tests {
                 Urgency::Quiet,
             ))
             .unwrap();
-        let raw = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().to_lowercase();
+        let raw = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .to_lowercase();
         // The property is not "the text is absent" — it legitimately appears inside
         // the title's value. It is that no LINE begins with it, since that is what
         // would turn it into a header of its own.
@@ -321,7 +355,10 @@ mod tests {
             !raw.lines().any(|l| l.trim_start().starts_with("x-evil:")),
             "header injection: {raw}"
         );
-        assert!(raw.contains("title: hi  x-evil: yes"), "the newline became a space: {raw}");
+        assert!(
+            raw.contains("title: hi  x-evil: yes"),
+            "the newline became a space: {raw}"
+        );
     }
 
     #[test]
@@ -337,13 +374,15 @@ mod tests {
 
     #[test]
     fn config_round_trips_through_json_so_it_can_live_in_config_json() {
-        let cfg = NotifyConfig::Ntfy { topic: "abc".into(), server: default_ntfy_server() };
+        let cfg = NotifyConfig::Ntfy {
+            topic: "abc".into(),
+            server: default_ntfy_server(),
+        };
         let json = serde_json::to_string(&cfg).unwrap();
         assert_eq!(serde_json::from_str::<NotifyConfig>(&json).unwrap(), cfg);
 
         // `server` may be omitted — the common case is the default.
-        let short: NotifyConfig =
-            serde_json::from_str(r#"{"kind":"ntfy","topic":"abc"}"#).unwrap();
+        let short: NotifyConfig = serde_json::from_str(r#"{"kind":"ntfy","topic":"abc"}"#).unwrap();
         assert_eq!(short, cfg);
     }
 }
