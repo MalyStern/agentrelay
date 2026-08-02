@@ -364,6 +364,30 @@ evaluate_guards. Rate limits emit RateLimited (the event the quota layer actuall
 matches on - the exact bug already found once in the Claude parser). Unknown lines
 are ignored: Codex's event vocabulary is still moving. 237 cargo tests.
 
+PHASE-4 (2026-08-02): two sub-agents delivered, both verified by me.
+  ui/  - standalone single-page UI, no build step, no CDN, no token stored. Top
+         banner answers 'do I need to do something?' first. Provenance never by
+         colour alone (glyph + border shape + word + aria-label). Demo mode with
+         five night-endings so it can be judged without a daemon. NOT visually
+         eyeballed - the agent could not screenshot; logic verified under a DOM shim.
+  i18n/ - 162 real strings extracted from daemon/src (none invented), en + he + ar
+         + es/fr/de/ru. he written by a Hebrew speaker; the rest marked UNREVIEWED.
+         check.mjs catches 6 classes; I verified all 6 fixtures exit 1 and the real
+         catalogue exits 0. Bidi: LTR content (paths, SHAs, $5.00, shell commands)
+         wrapped in U+2066..U+2069 so `git reset --keep abc1234` renders correctly
+         inside a Hebrew sentence. CLDR plural categories per language.
+IPC now serves GET /report (the UI agent found it was missing - it could show
+status but not the thing a person opens it for). The envelope carries headline +
+needs_attention so a client cannot compute a different verdict from the same data.
+240 cargo tests.
+
+LESSON: my new IPC tests hung for ~40 minutes of debugging. The cause was my own
+malformed test strings (literal newlines instead of 
+), so the server correctly
+waited forever for a header terminator. I 'fixed' it first with spawn_blocking +
+blocking_lock, which was chasing a phantom - reverted. Check the test before
+rewriting the code.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

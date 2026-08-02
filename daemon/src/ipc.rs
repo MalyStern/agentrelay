@@ -3,7 +3,7 @@
 //! to 127.0.0.1, every route except /health requires `Authorization: Bearer <token>`
 //! (a 256-bit token minted at start). Hand-rolled over tokio TCP — no web framework.
 //!
-//! Routes: GET /health · GET /status · POST /run {prompt,cwd,mission}.
+//! Routes: GET /health · GET /status · GET /report · POST /run {prompt,cwd,mission}.
 
 use crate::daemon::Daemon;
 use crate::error::{AgentRelayError, ErrorCode, Result};
@@ -85,6 +85,44 @@ fn default_mission() -> String {
     "default".into()
 }
 
+/// Pull `mission` and `cwd` out of a query string, with the same defaults the CLI
+/// uses. Kept deliberately small — this surface is loopback-only and takes two
+/// known keys, so a general query parser would be more code and more to get wrong.
+fn query_pair(path: &str) -> (String, String) {
+    let mut mission = "default".to_string();
+    let mut cwd = ".".to_string();
+    if let Some(q) = path.split_once('?').map(|(_, q)| q) {
+        for pair in q.split('&') {
+            match pair.split_once('=') {
+                Some(("mission", v)) if !v.is_empty() => mission = percent_decode(v),
+                Some(("cwd", v)) if !v.is_empty() => cwd = percent_decode(v),
+                _ => {}
+            }
+        }
+    }
+    (mission, cwd)
+}
+
+/// Minimal percent-decoding. A Windows path in a query string arrives with `%3A`
+/// and `%5C`; leaving them encoded would make every path lookup fail.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if b[i] == b'+' { b' ' } else { b[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
@@ -163,6 +201,20 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
     body.truncate(content_length);
 
     match (method.as_str(), path.as_str()) {
+        // The morning report over the wire. Without it a UI can show status but not
+        // the one thing a person opens it for at 8am, and would be left
+        // reconstructing units and checkpoints it cannot actually see.
+        ("GET", p) if p == "/report" || p.starts_with("/report?") => {
+            let (mission, cwd) = query_pair(p);
+            // Built inline, like /status. Producing it shells out to git a couple of
+            // times — measured at well under a tenth of a second — which is not
+            // worth moving off the runtime for a loopback admin endpoint used by one
+            // person's UI. If this ever serves something with real concurrency, that
+            // is the moment to reconsider, not before.
+            let report = daemon.lock().await.morning_report(&mission, &cwd).envelope();
+            let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
+            respond(&mut stream, 200, "OK", &json).await
+        }
         ("GET", "/status") => {
             let report = daemon.lock().await.status();
             let json = serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
@@ -265,6 +317,47 @@ mod tests {
         .await;
         assert_eq!(code, 413, "{body}");
         h.task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_morning_report_is_available_over_the_wire() {
+        // Without this a UI can show status but not the one thing a person opens it
+        // for at 8am, and is left reconstructing units it cannot see.
+        let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
+        let (code, body) = request(
+            h.addr,
+            &format!(
+                "GET /report HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\n\r\n",
+                h.token
+            ),
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
+        // The derived answers travel WITH the report, so a client cannot compute a
+        // different verdict from the same data.
+        assert!(body.contains("\"headline\""), "{body}");
+        assert!(body.contains("\"needs_attention\""), "{body}");
+        assert!(body.contains("\"lines\""), "{body}");
+        h.task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_report_route_still_needs_the_token() {
+        let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
+        let (code, _) = request(h.addr, "GET /report HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert_eq!(code, 401);
+        h.task.abort();
+    }
+
+    #[test]
+    fn a_windows_path_survives_the_query_string() {
+        // `C:\proj` arrives percent-encoded; leaving it encoded would make every
+        // lookup miss and the report come back empty for no visible reason.
+        let (mission, cwd) = query_pair("/report?mission=night&cwd=C%3A%5Cproj%5Cmy%20app");
+        assert_eq!(mission, "night");
+        assert_eq!(cwd, r"C:\proj\my app");
+        // Defaults match the CLI so the two surfaces cannot disagree.
+        assert_eq!(query_pair("/report"), ("default".into(), ".".into()));
     }
 
     #[tokio::test]

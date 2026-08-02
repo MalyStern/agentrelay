@@ -14,7 +14,8 @@
 
 use crate::store::Store;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Provenance {
     /// A command ran and its exit code decided this.
     Verified,
@@ -34,13 +35,13 @@ impl Provenance {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Line {
     pub provenance: Provenance,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MorningReport {
     pub mission_id: String,
     pub lines: Vec<Line>,
@@ -111,6 +112,31 @@ impl MorningReport {
             );
         }
         format!("AgentRelay: {} unit(s) done, all validators passed", self.units_completed)
+    }
+}
+
+/// The fields a client needs but should not compute for itself.
+///
+/// `needs_attention` and the headline are decisions, not formatting, and a UI that
+/// re-derives them will eventually disagree with the daemon — which means the
+/// screen says "all good" on a night the exit code called a failure. One source.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ReportEnvelope {
+    #[serde(flatten)]
+    pub report: MorningReport,
+    pub headline: String,
+    pub needs_attention: bool,
+    pub text: String,
+}
+
+impl MorningReport {
+    pub fn envelope(self) -> ReportEnvelope {
+        ReportEnvelope {
+            headline: self.headline(),
+            needs_attention: self.needs_attention(),
+            text: self.render(),
+            report: self,
+        }
     }
 }
 
