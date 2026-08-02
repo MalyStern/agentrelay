@@ -13,3 +13,6 @@ target/
 
 # Tauri generated
 app/src-tauri/gen/
+
+# graphify generated output (knowledge-graph artifacts)
+graphify-out/
