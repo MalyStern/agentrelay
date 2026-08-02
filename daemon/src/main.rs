@@ -16,7 +16,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Scaffold .agentrelay/ (config + database) in the current directory.
-    Init,
+    Init {
+        /// Start from a named mission template instead of the defaults — a complete,
+        /// sensible config (guards + validators + scope + budget). See `templates`.
+        #[arg(long)]
+        template: Option<String>,
+    },
+    /// List the built-in mission templates and what each one sets up.
+    Templates,
     /// Show the workspace status (db, schema, missions, config).
     Status,
     /// Run one supervised turn with the configured engine.
@@ -138,10 +145,55 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
     match cli.cmd {
-        Cmd::Init => {
-            Daemon::init(root).map_err(|e| e.to_string())?;
-            println!("Initialized .agentrelay/ (config.json + agentrelay.db).");
-            println!("Next: `agentrelay run \"<your task>\"` — or edit .agentrelay/config.json first.");
+        Cmd::Init { template } => {
+            let existed = root.join(".agentrelay").join("config.json").exists();
+            match template {
+                Some(name) => {
+                    // An unknown name is refused with the valid list, before anything
+                    // is written.
+                    let t = agentrelay::templates::Template::for_name(&name).map_err(|e| e.to_string())?;
+                    Daemon::init_with_config(root, t.to_config()).map_err(|e| e.to_string())?;
+                    if existed {
+                        println!(
+                            "A config already existed, so the `{}` template was NOT written over it.",
+                            t.name
+                        );
+                        println!("Delete .agentrelay/config.json first if you want to start from the template.");
+                        return Ok(());
+                    }
+                    println!("Initialized .agentrelay/ from the `{}` template.", t.name);
+                    println!("  {}", t.summary);
+                    println!();
+                    println!("Before an unattended run, review:");
+                    for note in t.review_notes() {
+                        println!("  - {note}");
+                    }
+                }
+                None => {
+                    Daemon::init(root).map_err(|e| e.to_string())?;
+                    println!("Initialized .agentrelay/ (config.json + agentrelay.db).");
+                    println!("Next: `agentrelay run \"<your task>\"` — or edit .agentrelay/config.json first.");
+                    println!("Or start from a template: `agentrelay templates`, then `agentrelay init --template <name>`.");
+                }
+            }
+            Ok(())
+        }
+        Cmd::Templates => {
+            println!("Mission templates — a complete, sensible config to start from:\n");
+            for t in agentrelay::templates::Template::all() {
+                println!("  {}", t.name);
+                println!("    {}", t.summary);
+                let cfg = t.to_config();
+                println!(
+                    "    guards: {} · validators: {} · scope: {} file(s) max · budget: {}",
+                    cfg.guards.len(),
+                    cfg.validators.len(),
+                    cfg.scope.max_files.map(|n| n.to_string()).unwrap_or_else(|| "no".into()),
+                    cfg.budget.describe().trim_end_matches('.'),
+                );
+                println!();
+            }
+            println!("Use one:  agentrelay init --template <name>");
             Ok(())
         }
         Cmd::Status => {

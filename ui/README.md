@@ -13,7 +13,7 @@ It is a single file, `index.html`, with no build step, no bundler, and no networ
 2. Open `index.html`, click **Connect to a daemon…**, and paste the address (e.g. `127.0.0.1:52001`) and the token from that file.
 3. The token is held in the page's memory only. It is never stored, never written to disk, and never rendered back into the page. Closing the tab forgets it; **Disconnect** drops it immediately.
 
-The page checks `GET /health` (no auth) to confirm something is really there, then reads `GET /status`.
+The page checks `GET /health` (no auth) to confirm something is really there, then reads `GET /status` and `GET /report`. In live mode it renders the real morning report the daemon serves — the same layout you see in demo mode, with the daemon's own verdict driving the banner.
 
 ## What each part of the screen answers
 
@@ -30,10 +30,21 @@ The page checks `GET /health` (no auth) to confirm something is really there, th
 
 ## An honesty note about live mode
 
-The daemon's HTTP surface (`daemon/src/ipc.rs`) exposes `GET /status` only. The unit-by-unit morning report, its provenance lines, and the checkpoint list are produced by the command line — `agentrelay report` — and are **not** served over IPC.
+The daemon's HTTP surface (`daemon/src/ipc.rs`) serves `GET /report` — the full morning report as a `ReportEnvelope`: every provenance line, the unit tallies, the checkpoints, **and the daemon's own `headline` and `needs_attention`**. Those last two are decisions, not formatting, so the page takes the banner verdict from the daemon rather than recomputing one that could drift from it (`daemon/src/report.rs` explains why: one source of truth, or the screen eventually says "all good" on a night the exit code called a failure).
 
-So in live mode this page shows exactly what `/status` returns (the banner, state, spending, isolation) and says plainly that the full report is not on the wire. It does **not** reconstruct units or checkpoints from status alone, because inventing evidence is the one thing this product exists to refuse. To see the full report layout, use demo mode — or run `agentrelay report` in your terminal.
+If you connect to an older daemon that answers `404` for `/report`, the page shows what `/status` gives (banner, state, spending, isolation), says plainly that this daemon did not serve the report, and points you at `agentrelay report` in your terminal. It never reconstructs units or checkpoints from status alone, because inventing evidence is the one thing this product exists to refuse.
+
+The token is used for `/status` and `/report` alike, held in memory only, and is never stored, logged, or rendered back into the page.
 
 ## Accessibility
 
 Keyboard reachable with a visible focus ring, real semantic HTML (`<header>`, `<main>`, `<section>`, `<dl>`, `role="status"`/`role="alert"` on the things that must be announced), works down to 320px wide, and respects `prefers-reduced-motion` and `prefers-color-scheme` (light and dark). Every provenance tag and every state is conveyed by text and shape, not colour, so it survives greyscale, colour blindness, and a screen reader.
+
+## How this was verified (real rendering, not just code)
+
+The browser preview pane in this environment could not render the page live (it renders `file://` outside the project as a static, no-JS snapshot, and blocks loopback by policy), so verification was done against **real pixels** from a headless Chrome driven over the DevTools Protocol:
+
+- **Every demo scenario** (failed / green / unverified / nothing / blocked) screenshotted at **desktop light and dark**. Banner class per scenario was asserted from the live DOM: `attention` for failed/unverified, `calm` for green/blocked, `neutral` for nothing.
+- **320px width**, light and dark: no horizontal overflow (`document.scrollWidth === window.innerWidth === 320`); the layout stacks and the command boxes scroll within themselves.
+- **Greyscale** (`filter: grayscale(1)` applied to the whole page, then screenshotted): VERIFIED (double border, `✓✓`), RECORDED (solid border, `▣`) and ESTIMATED (dashed border, `≈`) stay distinguishable with colour removed, and the banner's `!` + "Yes — you're needed" carries the alarm without red.
+- **Live `/report` end-to-end**: a mock daemon (shapes from `report.rs`/`daemon.rs`, with CORS so a `file://` page can read it) was connected through the real Connect dialog. The page rendered the report from the wire, took the banner headline from the daemon's `headline`, cleared the token field after connecting, and — against a mock that `404`s `/report` — fell back to the status-only view with the "did not serve the report" notice instead of fabricating one.

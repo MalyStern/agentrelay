@@ -35,6 +35,7 @@ pub mod notify;
 pub mod quota;
 pub mod report;
 pub mod send_gate;
+pub mod templates;
 pub mod validator;
 pub mod which;
 pub mod state;

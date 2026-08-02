@@ -131,12 +131,19 @@ impl Daemon {
         Self::dir(root).join("agentrelay.db")
     }
 
-    /// Scaffold `.agentrelay/` (config + db) under `root`.
+    /// Scaffold `.agentrelay/` (config + db) under `root`, with the default config.
     pub fn init(root: impl AsRef<Path>) -> Result<Daemon> {
+        Self::init_with_config(root, Config::default())
+    }
+
+    /// Scaffold `.agentrelay/` with a specific starting config — how `init
+    /// --template <name>` writes a template's guards/validators/scope/budget instead
+    /// of the defaults. An existing config is never overwritten: a template must not
+    /// silently discard settings a user already has.
+    pub fn init_with_config(root: impl AsRef<Path>, config: Config) -> Result<Daemon> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(Self::dir(&root))
             .map_err(|e| AgentRelayError::new(ErrorCode::Internal, e.to_string()))?;
-        let config = Config::default();
         if !Self::config_path(&root).exists() {
             let json = serde_json::to_string_pretty(&config).unwrap();
             std::fs::write(Self::config_path(&root), json)

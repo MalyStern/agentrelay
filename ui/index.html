@@ -14,11 +14,13 @@
   Two honesty rules that shaped this file, taken from the daemon:
     * We never present a guess as a fact. Provenance (VERIFIED / RECORDED /
       ESTIMATED) is shown on every claim, and never by colour alone.
-    * The morning report (units, checkpoints, provenance lines) is produced by
-      `agentrelay report` and is NOT served over IPC — only GET /status is. So in
-      LIVE mode we render exactly what /status returns and say plainly that the
-      full report is not on the wire. We do not invent a /report endpoint, because
-      inventing evidence is the one thing this product exists to refuse.
+    * We render only what the daemon actually reports. The daemon serves GET
+      /report (daemon/src/ipc.rs) — the full morning report, plus the daemon's own
+      `headline` and `needs_attention` decision. In LIVE mode we show that report
+      verbatim and take its verdict from the daemon, never recomputing a possibly-
+      divergent one. If a daemon is too old to serve /report we say so and fall
+      back to /status alone — we never reconstruct units or checkpoints we cannot
+      see, because inventing evidence is the one thing this product exists to refuse.
 -->
 <style>
   /* System fonts only — no web fonts, because a font fetch is a network request. */
@@ -336,8 +338,13 @@
  * Data shapes mirror the daemon's Rust structs exactly. We do not add
  * fields the daemon does not emit — a UI that shows more than the daemon
  * knows is a UI that guesses.
- *   MorningReport  -> daemon/src/report.rs
- *   StatusReport   -> daemon/src/daemon.rs
+ *   MorningReport / ReportEnvelope -> daemon/src/report.rs  (GET /report)
+ *   StatusReport                   -> daemon/src/daemon.rs  (GET /status)
+ *
+ * The envelope is a MorningReport plus the daemon's own `headline` and
+ * `needs_attention` — decisions, not formatting. We prefer those over anything we
+ * could recompute, so the screen can never call "all good" a night the exit code
+ * called a failure.
  * ------------------------------------------------------------------ */
 
 const PROV = {
@@ -511,6 +518,20 @@ async function fetchStatus() {
   return res.json();
 }
 
+// GET /report — the morning report itself, with the daemon's own headline and
+// needs_attention. A 404 means an older daemon without the route; we return null and
+// fall back to status alone rather than reconstructing evidence we cannot see.
+async function fetchReport() {
+  const res = await fetch("http://" + conn.addr + "/report", {
+    headers: { "Authorization": "Bearer " + conn.token },
+    cache: "no-store",
+  });
+  if (res.status === 404) return null;
+  if (res.status === 401) throw new Error("The token was rejected (401). Re-copy it from .agentrelay/ipc.json.");
+  if (!res.ok) throw new Error("The daemon answered " + res.status + " for /report.");
+  return res.json();
+}
+
 async function checkHealth(addr) {
   // /health needs no auth — a cheap way to prove something is actually there.
   const res = await fetch("http://" + addr + "/health", { cache: "no-store" });
@@ -521,7 +542,7 @@ async function checkHealth(addr) {
  * Rendering
  * ================================================================== */
 
-const state = { mode: "demo", scenarioId: SCENARIOS[0].id, report: null, status: null };
+const state = { mode: "demo", scenarioId: SCENARIOS[0].id, report: null, status: null, reportMissing: false };
 
 function currentScenario() { return SCENARIOS.find(s => s.id === state.scenarioId) || SCENARIOS[0]; }
 
@@ -558,7 +579,17 @@ function computeAnswer(report, status) {
     reasons.push("The mission " + status.state_meaning + ".");
   }
 
-  if (reasons.length > 0) {
+  // The daemon ships its own needs_attention with a live report. If it flags the
+  // night but our count-based reasons somehow didn't (a future daemon rule we don't
+  // enumerate), we still raise the banner — one source of truth, and it is the
+  // daemon's. A UI that quietly decided "calm" here would be the exact failure the
+  // report was built to prevent.
+  const daemonFlags = report && report.needs_attention === true;
+  if (daemonFlags && reasons.length === 0) {
+    reasons.push("The daemon flagged this run for your attention.");
+  }
+
+  if (reasons.length > 0 || daemonFlags) {
     level = "attention";
     return {
       level,
@@ -582,8 +613,11 @@ function computeAnswer(report, status) {
   };
 }
 
-/* Re-implements report.rs headline() so the phone headline and this screen agree. */
+/* Re-implements report.rs headline() so the phone headline and this screen agree.
+   A live envelope already carries the daemon's own headline; prefer it verbatim so
+   the two surfaces cannot word the same night differently. */
 function headlineFor(r) {
+  if (typeof r.headline === "string" && r.headline) return r.headline;
   if (r.nothing_happened) return "AgentRelay: nothing ran overnight";
   if (r.units_failed > 0) return "AgentRelay: " + r.units_completed + " unit(s) done, " + r.units_failed + " FAILED — work left uncommitted for you";
   if (r.units_unverified > 0) return "AgentRelay: " + r.units_completed + " unit(s) done, " + r.units_unverified + " NOT VERIFIED — no validators ran";
@@ -800,11 +834,13 @@ async function copyText(text, btn) {
   } catch (_) { done(false); }
 }
 
-/* ---- Live-mode notice: the report is not on the wire, and we say so. ---- */
-function liveReportNotice() {
+/* ---- Fallback for a daemon too old to serve /report. Newer daemons return the
+   full report over the wire and this card never appears; when a daemon 404s the
+   route we say why the report is missing rather than reconstructing it. ---- */
+function oldDaemonNotice() {
   const card = el("section", { class: "card", "aria-labelledby": "noticeH" });
-  card.appendChild(el("h2", { id: "noticeH", text: "The full report is not served over IPC" }));
-  card.appendChild(el("p", { text: "The daemon's HTTP surface exposes GET /status only — the live state, spending, and isolation shown above. The unit-by-unit morning report, its provenance lines, and the checkpoint list are produced by the command line:" }));
+  card.appendChild(el("h2", { id: "noticeH", text: "This daemon did not serve the report" }));
+  card.appendChild(el("p", { text: "The panels above are from GET /status. This daemon answered 404 for GET /report, so it predates that route — the unit-by-unit report, its provenance lines, and the checkpoints are not on the wire from it. Upgrade the daemon, or read the report in your terminal:" }));
   const cmd = el("div", { class: "cmd" });
   cmd.appendChild(el("code", { text: "agentrelay report" }));
   const btn = el("button", { type: "button", "aria-label": "Copy the report command", text: "Copy" });
@@ -824,7 +860,7 @@ function render() {
     const sc = currentScenario();
     report = sc.report; status = sc.status;
   } else {
-    report = null; status = state.status;
+    report = state.report; status = state.status;
   }
 
   renderAnswer(computeAnswer(report, status));
@@ -839,8 +875,10 @@ function render() {
   if (status) main.appendChild(spendingCard(status));
   if (report) {
     main.appendChild(checkpointsCard(report));
-  } else {
-    main.appendChild(liveReportNotice());
+  } else if (state.mode === "live" && state.reportMissing) {
+    // Live, but this daemon is too old to serve /report. Say that plainly instead
+    // of pretending the report simply doesn't exist.
+    main.appendChild(oldDaemonNotice());
   }
   if (status) main.appendChild(environmentCard(status));
 
@@ -859,7 +897,9 @@ function render() {
     document.getElementById("refreshBtn").hidden = false;
     document.getElementById("connectBtn").hidden = false;
     document.getElementById("connectBtn").textContent = "Disconnect";
-    sourceNote.textContent = "Live mode: the panels above are GET /status from the daemon at " + conn.addr + ". Nothing else was fetched.";
+    sourceNote.textContent = state.reportMissing
+      ? "Live mode: GET /status from the daemon at " + conn.addr + ". It did not serve /report. Nothing else was fetched."
+      : "Live mode: GET /status and GET /report from the daemon at " + conn.addr + ". Nothing else was fetched.";
   }
 }
 
@@ -883,7 +923,7 @@ function wireConnect() {
     if (state.mode === "live") {
       // Disconnect: drop the token from memory and return to demo.
       conn.addr = null; conn.token = null;
-      state.mode = "demo"; state.status = null;
+      state.mode = "demo"; state.status = null; state.report = null; state.reportMissing = false;
       connectBtn.textContent = "Connect to a daemon…";
       render();
       return;
@@ -905,6 +945,8 @@ function wireConnect() {
       if (!ok) throw new Error("No daemon answered /health at that address.");
       conn.addr = addr; conn.token = token;           // token lives here in memory only
       state.status = await fetchStatus();
+      const rep = await fetchReport();                 // null only if the daemon 404s the route
+      state.report = rep; state.reportMissing = (rep === null);
       state.mode = "live";
       // Clear the token field so it is not left sitting in the DOM.
       document.getElementById("token").value = "";
@@ -917,10 +959,15 @@ function wireConnect() {
   });
 
   document.getElementById("refreshBtn").addEventListener("click", async () => {
-    try { state.status = await fetchStatus(); render(); }
+    try {
+      state.status = await fetchStatus();
+      const rep = await fetchReport();
+      state.report = rep; state.reportMissing = (rep === null);
+      render();
+    }
     catch (e) {
       // A daemon that went away must not leave stale numbers looking live.
-      conn.addr = null; conn.token = null; state.mode = "demo"; state.status = null;
+      conn.addr = null; conn.token = null; state.mode = "demo"; state.status = null; state.report = null; state.reportMissing = false;
       document.getElementById("connectBtn").textContent = "Connect to a daemon…";
       render();
       alert("Lost the daemon: " + (e.message || e) + "\nBack to demo mode.");
