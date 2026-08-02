@@ -128,8 +128,21 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 async fn respond(stream: &mut TcpStream, code: u16, reason: &str, body: &str) -> std::io::Result<()> {
+    // CORS, so a UI opened from a file:// page (origin `null`) or any local origin can
+    // actually reach this. It looks permissive, and for a normal web server it would
+    // be reckless — but every route here except /health is gated by an unguessable
+    // bearer token, and CORS never leaks that token to a page that does not already
+    // have it. An attacker page can send a request; it cannot read the token to
+    // authorize one. The bind is loopback-only on top of that. Without these headers
+    // the browser refuses the preflight and live mode simply never connects — the
+    // failure the UI kept hitting.
     let res = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {code} {reason}\r\n\
+         Content-Type: application/json\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+         Access-Control-Allow-Headers: authorization, content-type\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(res.as_bytes()).await?;
@@ -172,6 +185,14 @@ async fn handle_conn(mut stream: TcpStream, daemon: Arc<Mutex<Daemon>>, token: S
         }
     }
 
+    // The CORS preflight the browser sends before a cross-origin GET/POST that
+    // carries an Authorization header. It must be answered WITHOUT the token — the
+    // browser has not attached it yet — so it comes before the auth check. `respond`
+    // already puts the allow-headers on every reply; a 204 with an empty body is all
+    // the preflight needs.
+    if method == "OPTIONS" {
+        return respond(&mut stream, 204, "No Content", "").await;
+    }
     // /health needs no auth.
     if method == "GET" && path == "/health" {
         return respond(&mut stream, 200, "OK", "{\"ok\":true}").await;
@@ -358,6 +379,35 @@ mod tests {
         assert_eq!(cwd, r"C:\proj\my app");
         // Defaults match the CLI so the two surfaces cannot disagree.
         assert_eq!(query_pair("/report"), ("default".into(), ".".into()));
+    }
+
+    #[tokio::test]
+    async fn a_cors_preflight_is_answered_without_the_token() {
+        // The browser sends OPTIONS before a GET that will carry Authorization, and
+        // it has not attached the token yet — so the preflight must succeed on its
+        // own, or live mode never gets as far as the real request.
+        let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
+        let (code, _) = request(
+            h.addr,
+            "OPTIONS /report HTTP/1.1\r\nHost: x\r\nOrigin: null\r\nAccess-Control-Request-Headers: authorization\r\n\r\n",
+        )
+        .await;
+        assert_eq!(code, 204, "the preflight must pass with no token");
+        h.task.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_carry_the_cors_headers_a_file_page_needs() {
+        let h = serve(test_daemon().await, "127.0.0.1:0").await.unwrap();
+        // Read the raw response so we can see the headers, not just the body.
+        let mut s = TcpStream::connect(h.addr).await.unwrap();
+        s.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).await.unwrap();
+        let text = String::from_utf8_lossy(&raw).to_lowercase();
+        assert!(text.contains("access-control-allow-origin: *"), "{text}");
+        assert!(text.contains("access-control-allow-headers: authorization"), "{text}");
+        h.task.abort();
     }
 
     #[tokio::test]

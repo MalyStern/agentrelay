@@ -63,12 +63,12 @@ if (-not $SkipTests) {
 
     foreach ($cli in @("patchproof", "repodoctor", "lastgood")) {
         $dir = Join-Path $q8 $cli
-        if (-not (Test-Path $dir)) { Check "$cli present" $false "not found"; continue }
+        if (-not (Test-Path $dir)) { Check "${cli} present" $false "not found"; continue }
         Push-Location $dir
         $out = (& npm.cmd test 2>&1 | Out-String) -replace "`e\[[\d;]*m", ""
         $tm = [regex]::Match($out, "Tests\s+(\d+)\s+passed")
         $green = $tm.Success -and ($out -notmatch "failed")
-        Check "$cli: npm test green" $green ("(" + $tm.Groups[1].Value + " passed)")
+        Check "${cli}: npm test green" $green ("(" + $tm.Groups[1].Value + " passed)")
         Pop-Location
     }
 }
@@ -119,7 +119,7 @@ Set-Content -Encoding ascii ".agentrelay\config.json" $cfg
 
 # status reflects the config, and says the budget out loud
 $status = & $agentrelay status 2>&1 | Out-String
-Check "status shows a spending cap" ($status -match "\$5\.00")
+Check "status shows a spending cap" ($status -match '\$5\.00')
 
 # validate - runs the real command, exit 0 because node --version passes
 & $agentrelay validate --unit u1 2>&1 | Out-Null
@@ -139,14 +139,21 @@ Check "the user's own file was left uncommitted" (Test-Path "my-notes.txt")
 $report = & $agentrelay report 2>&1 | Out-String
 Check "report labels evidence VERIFIED" ($report -match "\[VERIFIED\]")
 
-# Guard hook blocks a real forbidden action (no live agent needed - drive the hook)
+# Guard hook blocks a real forbidden action (no live agent needed - drive the hook).
+# The tool call is written to an ASCII file and piped in via cmd's `type`: PowerShell's
+# own pipe to a native exe re-encodes the bytes, and the daemon would read garbage and
+# (correctly, for garbage) deny everything - hiding whether the guard actually works.
 & $agentrelay install-hook 2>&1 | Out-Null
 Check "install-hook writes .claude/settings.json" (Test-Path ".claude\settings.json")
-$hookIn = '{"tool_name":"Write","tool_input":{"file_path":".env"},"cwd":"' + ($sandbox -replace '\\','/') + '"}'
-$hookOut = $hookIn | & $agentrelay hook --cwd $sandbox 2>&1 | Out-String
-Check "the hook DENIES writing a forbidden path" (($hookOut -match "deny") -and ($LASTEXITCODE -eq 2))
-$hookOk = '{"tool_name":"Write","tool_input":{"file_path":"src/ok.rs"},"cwd":"' + ($sandbox -replace '\\','/') + '"}'
-$hookOk | & $agentrelay hook --cwd $sandbox 2>&1 | Out-Null
+
+$denyFile = Join-Path $sandbox "hook-deny.json"
+[IO.File]::WriteAllText($denyFile, '{"tool_name":"Write","tool_input":{"file_path":".env"}}')
+cmd /c "type `"$denyFile`" | `"$agentrelay`" hook --cwd `"$sandbox`"" 2>&1 | Out-Null
+Check "the hook DENIES writing a forbidden path" ($LASTEXITCODE -eq 2)
+
+$allowFile = Join-Path $sandbox "hook-allow.json"
+[IO.File]::WriteAllText($allowFile, '{"tool_name":"Write","tool_input":{"file_path":"src/ok.rs"}}')
+cmd /c "type `"$allowFile`" | `"$agentrelay`" hook --cwd `"$sandbox`"" 2>&1 | Out-Null
 Check "the hook ALLOWS an in-workspace write" ($LASTEXITCODE -eq 0)
 
 # templates (only if this build has them - agent-added, guard so an older build passes)
