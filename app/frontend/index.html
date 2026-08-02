@@ -210,8 +210,16 @@
           ["Notifications", esc(s.notifications || "")],
         ];
         let html = rows.map(([k, v]) => `<div class="row"><strong style="flex:0 0 120px">${k}</strong><span>${v}</span></div>`).join("");
+        // `waiting_for_you` is true for a draft too — but a draft that never ran is
+        // not a stalled run, so it must not wear the red "something's wrong" alarm.
+        // A false alarm on a fresh workspace is exactly the noise this product avoids.
         if (s.waiting_for_you) {
-          html = `<p class="err"><strong>This run will not continue by itself.</strong></p>` + html;
+          const draft = s.state === "draft";
+          const cls = draft ? "muted" : "err";
+          const note = draft
+            ? "Not started yet — nothing runs until you begin a unit."
+            : "This run will not continue by itself — it needs you.";
+          html = `<p class="${cls}"><strong>${esc(note)}</strong></p>` + html;
         }
         $("status").innerHTML = html;
       }
