@@ -8,6 +8,7 @@
 pub mod acp;
 pub mod acp_adapter;
 pub mod adapter;
+pub mod calendar;
 pub mod checkpoint;
 pub mod claude_adapter;
 pub mod claude_stream;

@@ -58,6 +58,14 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         minutes: i64,
     },
+    /// Does the calendar (quiet hours / busy blocks) allow a unit of this length to
+    /// start now? Exits 0 to go ahead, 75 to wait — the sibling of `fits`, but for
+    /// your day rather than the quota window.
+    Schedule {
+        /// Roughly how long the unit takes, in minutes.
+        #[arg(long, default_value_t = 30)]
+        minutes: i64,
+    },
     /// Note what is already uncommitted, BEFORE the agent starts a unit.
     Begin {
         #[arg(long, default_value = ".")]
@@ -155,6 +163,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!("{}", s.notifications);
             println!();
             println!("{}", s.cloud);
+            println!();
+            println!("{}", s.schedule);
             println!();
             println!("{} Spent so far: ${:.2}.", s.budget, s.spent_usd);
             Ok(())
@@ -314,6 +324,32 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                     println!("Being stopped mid-unit costs more than waiting: the work would be");
                     println!("half-done, unvalidated and uncheckpointed.");
                     // A distinct code so a script can tell "wait" from a real failure.
+                    std::process::exit(75);
+                }
+            }
+        }
+        Cmd::Schedule { minutes } => {
+            use agentrelay::calendar::ScheduleDecision;
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            // A malformed schedule refuses loudly rather than running through a window
+            // the user meant to block.
+            match d.schedule_decision(minutes * 60_000).map_err(|e| e.to_string())? {
+                ScheduleDecision::Start => {
+                    println!("Go — a ~{minutes} minute unit does not run into any quiet-hours or busy window.");
+                    Ok(())
+                }
+                ScheduleDecision::StartNoSchedule => {
+                    println!("Go — no schedule is set, so there is nothing to wait for.");
+                    Ok(())
+                }
+                ScheduleDecision::WaitUntil { resume_at_utc, wait_ms } => {
+                    println!("Wait — a ~{minutes} minute unit would collide with a quiet-hours or busy window.");
+                    println!("  clears at: {resume_at_utc}");
+                    println!("  wait:      {} minute(s)", wait_ms / 60_000);
+                    println!();
+                    println!("Being stopped mid-unit costs more than waiting: the work would be");
+                    println!("half-done, unvalidated and uncheckpointed.");
+                    // The same distinct "wait, not a failure" code `fits` uses.
                     std::process::exit(75);
                 }
             }

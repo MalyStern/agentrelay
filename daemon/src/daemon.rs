@@ -58,6 +58,10 @@ pub struct Config {
     /// budget cap; `status` states that limitation plainly.
     #[serde(default)]
     pub cloud: crate::cloud::CloudConfig,
+    /// Quiet-hours / busy blocks to schedule a run around. Nothing set means run
+    /// whenever asked, and `status` says so.
+    #[serde(default)]
+    pub schedule: crate::calendar::Schedule,
 }
 
 impl Default for Config {
@@ -77,6 +81,7 @@ impl Default for Config {
             scope: crate::drift::UnitScope::default(),
             fix_loop: crate::fixloop::FixLoopConfig::default(),
             cloud: crate::cloud::CloudConfig::default(),
+            schedule: crate::calendar::Schedule::default(),
         }
     }
 }
@@ -102,6 +107,9 @@ pub struct StatusReport {
     /// In plain words: whether tasks are delegated to a hosted agent, and the fact
     /// that such a run is NOT supervised.
     pub cloud: String,
+    /// In plain words: the quiet-hours / busy windows a run is scheduled around, or
+    /// that none is set.
+    pub schedule: String,
 }
 
 const DIR: &str = ".agentrelay";
@@ -211,7 +219,23 @@ impl Daemon {
             waiting_for_you: st.needs_a_person(),
             isolation: self.config.isolation.describe(),
             cloud: self.config.cloud.describe(),
+            schedule: self.config.schedule.describe(),
         }
+    }
+
+    /// May a unit of roughly `estimated_ms` start right now, given the configured
+    /// quiet-hours / busy windows? `now` is the machine's local time, so the
+    /// wall-clock windows are read in the offset the user actually lives in.
+    ///
+    /// Separate from `should_start_unit` (the quota window) on purpose: a run can be
+    /// clear of the quota wall yet still land in a meeting, or the reverse. A night
+    /// script gates on both.
+    pub fn schedule_decision(
+        &self,
+        estimated_ms: i64,
+    ) -> Result<crate::calendar::ScheduleDecision> {
+        let now = chrono::Local::now().to_rfc3339();
+        self.config.schedule.decide(&now, estimated_ms, None)
     }
 
     /// May another turn start, given what has been spent so far?
