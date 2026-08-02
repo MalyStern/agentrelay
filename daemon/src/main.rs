@@ -39,6 +39,18 @@ enum Cmd {
         #[arg(long, default_value = "default")]
         unit: String,
     },
+    /// Answer one PreToolUse hook call: reads the tool call on stdin, exits 2 to
+    /// block. Meant to be run BY the agent, not by you.
+    Hook {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+    },
+    /// Install the PreToolUse hook so guards BLOCK instead of reacting.
+    InstallHook {
+        /// Remove it again.
+        #[arg(long)]
+        uninstall: bool,
+    },
     /// Note what is already uncommitted, BEFORE the agent starts a unit.
     Begin {
         #[arg(long, default_value = ".")]
@@ -171,6 +183,79 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             } else {
                 Err("validators failed — unit is NOT complete".to_string())
             }
+        }
+        Cmd::Hook { cwd } => {
+            use std::io::Read;
+            // Read the tool call the agent is asking permission for. Every failure
+            // path below denies: a hook that allows what it cannot read is not a hook.
+            let mut raw = String::new();
+            let _ = std::io::stdin().read_to_string(&mut raw);
+
+            // The guards come from the workspace config. If it cannot be opened we
+            // do NOT fall back to "no guards" — that is the shape of every fail-open
+            // bug this codebase has had.
+            let verdict = match Daemon::open(root) {
+                Ok(d) => agentrelay::hook::decide(&raw, &d.config().guards, &cwd),
+                Err(e) => agentrelay::hook::deny(format!(
+                    "AgentRelay could not load its guards ({e}), so this tool call is refused \
+                     rather than run unguarded."
+                )),
+            };
+
+            // Both documented signals: the JSON decision on stdout and the exit
+            // code. Emitting only one risks a denial being ignored by whichever the
+            // agent actually reads.
+            println!("{}", verdict.json);
+            if verdict.allow {
+                Ok(())
+            } else {
+                eprintln!("{}", verdict.reason);
+                std::process::exit(2);
+            }
+        }
+        Cmd::InstallHook { uninstall } => {
+            let settings_path = root.join(".claude").join("settings.json");
+            let existing: serde_json::Value = std::fs::read_to_string(&settings_path)
+                .ok()
+                .and_then(|s| {
+                    let s = s.strip_prefix('\u{feff}').unwrap_or(&s).to_string();
+                    serde_json::from_str(&s).ok()
+                })
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            // An absolute path: the agent's cwd is not necessarily ours.
+            let exe = std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "agentrelay".to_string());
+            let command = format!("\"{}\" hook --cwd \"{}\"", exe, root.display());
+
+            let next = if uninstall {
+                agentrelay::hook::remove_hook_settings(&existing, &command)
+            } else {
+                match agentrelay::hook::merge_hook_settings(&existing, &command) {
+                    Some(v) => v,
+                    None => {
+                        println!(
+                            "Already installed, or {} is not in a shape we can safely edit — \
+                             nothing was changed.",
+                            settings_path.display()
+                        );
+                        return Ok(());
+                    }
+                }
+            };
+
+            std::fs::create_dir_all(settings_path.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(&settings_path, serde_json::to_string_pretty(&next).unwrap())
+                .map_err(|e| e.to_string())?;
+            if uninstall {
+                println!("Removed the AgentRelay hook from {}.", settings_path.display());
+            } else {
+                println!("Installed the AgentRelay hook in {}.", settings_path.display());
+                println!("Guards now BLOCK a forbidden tool call before it runs, instead of");
+                println!("stopping the agent after the fact. Your other hooks were left alone.");
+            }
+            Ok(())
         }
         Cmd::Begin { cwd, mission, unit } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;

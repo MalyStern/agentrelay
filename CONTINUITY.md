@@ -164,11 +164,22 @@ the morning showed an unexplained halt. dirty_paths now uses `-z` +
 a rename as `old -> new` on one line, both of which reached the report verbatim.
 125 cargo tests.
 
-STILL OPEN from the audit: keepawake is per-thread but held across awaits (needs
-PowerCreateRequest, which is per-process), and install_guards is a no-op so
-Watchtower-1 is advisory (kill-after-the-fact on an async pipe) rather than a
-deterministic PreToolUse block — the biggest remaining gap vs plan §ז.4. Doing
-that properly needs the Agent SDK / an MCP tool we own, per §ז.1.
+GUARDS NOW BLOCK (2026-08-02): hook.rs + `agentrelay hook` / `agentrelay
+install-hook`. The agent runs the hook and WAITS for the answer before the tool
+executes, so a forbidden call never starts — instead of the daemon spotting it on
+an async NDJSON pipe and racing to kill the tree. Same evaluate_guards as the
+daemon, so the two paths cannot drift. Denies on: unreadable input, empty tool
+name, unparsable arguments, and a config it cannot load (never falls back to "no
+guards"). Emits BOTH documented signals (exit 2 + the permissionDecision JSON).
+install-hook merges into .claude/settings.json and leaves the user's other hooks
+alone; installing twice is a no-op; malformed settings are refused, not rewritten.
+Verified end-to-end through the real binary: `git push` -> exit 2 + deny JSON, an
+in-workspace Write -> exit 0. 135 cargo tests.
+
+STILL OPEN: the exact hook wire contract (field names / how the denial is read)
+is a Phase-0 kill-test needing ONE run against a real Claude — both spellings and
+both signals are emitted so a mismatch degrades rather than fails open. Also
+keepawake is per-thread but held across awaits (needs PowerCreateRequest).
 
 ## Done log (most recent first)
 

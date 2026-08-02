@@ -16,6 +16,7 @@ pub mod daemon;
 pub mod error;
 pub mod events;
 pub mod guard;
+pub mod hook;
 pub mod ipc;
 pub mod keepawake;
 pub mod mission;
