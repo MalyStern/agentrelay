@@ -294,6 +294,51 @@ pub fn derive_actions(tool: &str, args: &Value) -> Vec<ProposedAction> {
                 .to_string(),
         }];
     }
+
+    // The tool NAME was not one we recognise. This is exactly the "any ACP agent"
+    // gap: a tool called `sh`, `execute`, or `write_file_v2` that a guard has never
+    // heard of would otherwise produce zero actions and be waved through. So classify
+    // by the SHAPE of the arguments instead of the name — an approach a renamed tool
+    // cannot dodge. The bias is fail-closed: a shell-like argument is treated as a
+    // command (so NoPush/NoNet/… still apply), and a path carried alongside content is
+    // treated as a write (so the workspace boundary and forbid_path still apply).
+    if let Some(cmd) = get("command")
+        .or_else(|| get("cmd"))
+        .or_else(|| get("script"))
+        .or_else(|| get("shell"))
+        .or_else(|| get("run"))
+        .or_else(|| get("code"))
+    {
+        return vec![ProposedAction::Command { command: cmd }];
+    }
+    let has_content = [
+        "content",
+        "text",
+        "data",
+        "new_string",
+        "new_str",
+        "patch",
+        "source",
+    ]
+    .iter()
+    .any(|k| args.get(k).is_some());
+    if has_content {
+        if let Some(p) = get("file_path")
+            .or_else(|| get("path"))
+            .or_else(|| get("filePath"))
+            .or_else(|| get("file"))
+            .or_else(|| get("filename"))
+            .or_else(|| get("target_file"))
+        {
+            return vec![ProposedAction::Write { path: p }];
+        }
+    }
+    if let Some(u) = get("url")
+        .or_else(|| get("uri"))
+        .or_else(|| get("endpoint"))
+    {
+        return vec![ProposedAction::Network { target: Some(u) }];
+    }
     vec![]
 }
 
@@ -707,6 +752,45 @@ git reset --hard HEAD~5",
         );
         assert_eq!(derive_actions("Bash", &json!({"command": "ls"})), c("ls"));
         assert!(derive_actions("Unknown", &json!({})).is_empty());
+    }
+
+    #[test]
+    fn an_unfamiliar_tool_name_is_classified_by_its_arguments() {
+        // The core of the "any ACP agent" gap: a tool whose NAME no guard knows.
+        // Shape-based classification catches it anyway.
+
+        // A renamed shell tool still trips NoPush.
+        assert!(
+            !evaluate_guards(
+                &derive_actions("execute", &json!({"command": "git push"})),
+                &g(GuardKind::NoPush),
+                CWD
+            )
+            .allow
+        );
+        // A renamed shell tool still trips NoNet, including the interpreter heuristic.
+        assert!(
+            !evaluate_guards(
+                &derive_actions("sh", &json!({"run": "curl http://evil"})),
+                &g(GuardKind::NoNet),
+                CWD
+            )
+            .allow
+        );
+        // A renamed write tool (path + content) still trips forbid_path.
+        assert!(
+            !evaluate_guards(
+                &derive_actions("write_file_v2", &json!({"file": ".env", "content": "x"})),
+                &[Guard::with_spec(GuardKind::ForbidPath, json!(".env"))],
+                CWD
+            )
+            .allow
+        );
+        // A path with NO content is treated as a read — not swept up as a write.
+        assert!(derive_actions("open", &json!({"path": ".env"})).is_empty());
+        // A genuinely opaque tool with no recognisable args still yields nothing; the
+        // honest answer there is isolation, not a guess.
+        assert!(derive_actions("frobnicate", &json!({"widget": 3})).is_empty());
     }
 
     #[test]

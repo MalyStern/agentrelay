@@ -1,8 +1,9 @@
 # AgentRelay
 
 **Run an AI coding agent overnight, unattended — and keep control.** AgentRelay is a
-local supervisor for Claude Code (and Codex / any ACP agent). It blocks a forbidden
-tool call *before* it runs, refuses to call work "done" without a passing test suite,
+local supervisor for Claude Code, with adapters for Codex and ACP agents. It blocks a
+forbidden tool call *before* it runs, refuses to call work "done" without a passing
+test suite,
 checkpoints every validated unit into git so a bad night is one command to undo, caps
 spending, and writes a morning report where **every line says where it came from** —
 so you can tell evidence from a guess at 8am.
