@@ -1,14 +1,14 @@
 # AgentRelay
 
-**Run an AI coding agent overnight, unattended — and keep control.** AgentRelay is a
-local supervisor for Claude Code, with adapters for Codex and ACP agents. It blocks a
-forbidden tool call *before* it runs, refuses to call work "done" without a passing
-test suite,
-checkpoints every validated unit into git so a bad night is one command to undo, caps
-spending, and writes a morning report where **every line says where it came from** —
-so you can tell evidence from a guess at 8am.
+**AgentRelay is a local supervisor (a Rust daemon) for AI coding agents that run
+unattended** — Claude Code, with adapters for Codex and ACP agents. It blocks a
+forbidden tool call *before* it runs, refuses to call work "done" without passing
+tests, checkpoints every validated unit into git so a bad night is one command to
+undo, caps spending, and writes a morning report where **every line says where it came
+from** — so you can tell evidence from a guess at 8am.
 
-Everything runs on your machine. No account, no telemetry, nothing uploaded.
+In one sentence: **run an AI coding agent overnight and keep control.** Everything runs
+on your machine. No account, no telemetry, nothing uploaded.
 
 ## The idea in one line
 
@@ -16,6 +16,31 @@ An overnight agent run fails in known ways — it drifts onto the wrong problem,
 `git push` slips out, "stop" doesn't really stop, it burns the night repeating one
 broken fix, or it claims success it can't prove. AgentRelay handles each of those
 **deterministically**, and never presents a guess as a fact.
+
+## When to use it
+
+Reach for AgentRelay when you want an AI coding agent to work while you're not
+watching, and you need guarantees instead of hope:
+
+- **Run an agent overnight on a real repository** and wake up to validated commits, not
+  a pile of unreviewed edits or a broken tree.
+- **Let an agent grind on a failing test suite or a refactor** for hours, gated so it
+  can only mark a unit "done" when your tests actually pass.
+- **Stop an agent from doing something irreversible** — pushing to `main`, deploying,
+  writing outside the workspace, reading `.env` — *before* the call runs, not after.
+- **Cap what an unattended run can spend**, checked before every turn, because money is
+  the one thing a `git reset` can't restore.
+- **Keep an agent's overnight work undoable** — every validated step is a git
+  checkpoint that touches only the agent's files, never your own uncommitted work.
+- **Get a trustworthy morning summary** that separates what a command verified from what
+  the model merely claimed.
+- **Contain an untrusted agent** in a network-off container when the guards alone
+  aren't enough.
+- **Map an unfamiliar codebase** the agent is about to work on into a queryable
+  knowledge graph (via the optional graphify integration).
+
+If instead you want a hosted, fully-autonomous agent with no local control surface,
+AgentRelay is the opposite of that on purpose — its whole value is the control layer.
 
 ## What it does
 
@@ -28,6 +53,7 @@ broken fix, or it claims success it can't prove. AgentRelay handles each of thos
 | 🌙 **Survives the night** | Reads the quota reset time to schedule around the wall, keeps the machine awake, and resumes without re-reading the whole repo. |
 | 📊 **A report you can trust** | Every line tagged **VERIFIED** (a command decided it) / **RECORDED** (observed) / **ESTIMATED** (a rule of thumb). Nothing the model merely claimed appears. |
 | 🐳 **Optional isolation** | Run the agent in a container with the network off by default — the one layer that doesn't depend on recognising a command. |
+| 🕸️ **Optional knowledge graph** | Build a queryable map of the codebase with `agentrelay graph` (via the external [graphify](https://pypi.org/project/graphifyy/) tool) — free AST-only by default, so the agent can query structure instead of re-reading files. |
 
 ## How to use it
 
@@ -118,5 +144,5 @@ MIT.
 <sub>Keywords: supervise Claude Code overnight, autonomous AI coding agent guardrails,
 PreToolUse hook block, evidence-gated agent completion, git checkpoint AI agent work,
 budget cap for AI agents, Claude Code plugin, MCP server, ACP agent supervision, Codex
-exec supervisor, quota-reset resume, local-first no-telemetry agent runner, Rust +
-Tauri.</sub>
+exec supervisor, quota-reset resume, local-first no-telemetry agent runner, knowledge
+graph of codebase, graphify integration, Rust + Tauri.</sub>
