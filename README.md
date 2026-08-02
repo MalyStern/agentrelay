@@ -61,11 +61,13 @@ report for you, no terminal, no token to paste (`app/`).
 
 ## Status — honest
 
-Phases 1–4 are **built and tested: 282 Rust tests**, plus a full end-to-end
-verification harness (`scripts/verify-all.ps1`, 22 checks) that drives the real binary
-through init → validate → the checkpoint-safety → the report → the guard actually
-denying a `.env` write. The desktop app builds and launches; the plugin's hook was
-verified blocking a live Claude tool call.
+Phases 1–4 are **built and tested: 284 Rust tests**, plus a portable end-to-end
+verification harness (`scripts/verify.ps1` / `scripts/verify.sh`) that drives the real
+binary through init → validate → the checkpoint-safety → the report → the guard
+actually denying a `.env` write. Every push runs the daemon's tests, clippy (warnings
+are errors), and formatting on Linux, Windows, and macOS
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). The desktop app builds and
+launches; the plugin's hook was verified blocking a live Claude tool call.
 
 What still needs a human: one real overnight run against a live Claude to confirm the
 quota-reset resume behaviour end-to-end (it's tested against a fake agent and the real
@@ -76,20 +78,27 @@ native-speaker review of the non-English message catalogues. See
 ## Layout
 
 ```
-daemon/    the Rust supervisor — the product. 282 tests.
+daemon/    the Rust supervisor — the product. 284 tests.
 app/       the Tauri desktop app (native window over the daemon's local API)
 plugin/    the Claude Code plugin (hook + commands + skill + MCP server)
 ui/        a standalone browser UI (demo mode + live)
 i18n/      message catalogue, 7 languages, with a bidi/plural validator
-scripts/   verify-all.ps1 (full harness) + make-sandbox.ps1 (a ready demo workspace)
+scripts/   verify.ps1 / verify.sh (portable harness) + make-sandbox.ps1 (demo workspace)
 docs/      the authoritative design (Hebrew) + ADRs
 ```
 
 Build and verify everything:
 
 ```bash
-cd daemon && cargo test          # the core, 282 tests
-powershell -File scripts/verify-all.ps1   # builds + all suites + a real lifecycle
+cd daemon && cargo test          # the core, 284 tests
+```
+
+```bash
+pwsh scripts/verify.ps1          # Windows/macOS/Linux: builds + tests + a real lifecycle
+```
+
+```bash
+bash scripts/verify.sh           # the same, for Linux/macOS shells
 ```
 
 ## Design principle

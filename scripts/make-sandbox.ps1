@@ -70,7 +70,7 @@ Write-Host ""
 Write-Host "Try it three ways:" -ForegroundColor Cyan
 Write-Host "  1. Desktop app:  open the app, Choose workspace -> the folder above, Start daemon."
 Write-Host "  2. CLI status:   cd `"$dest`"; & `"$agentrelay`" status"
-Write-Host "  3. Guard proof:  it will refuse to write .env - see scripts\verify-all.ps1"
+Write-Host "  3. Guard proof:  it will refuse to write .env - see scripts\verify.ps1"
 Write-Host ""
 Write-Host "Note: a real overnight run also needs Claude installed" -ForegroundColor Yellow
 Write-Host "  (npm install -g @anthropic-ai/claude-code). Everything else works without it."

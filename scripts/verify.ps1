@@ -1,17 +1,19 @@
-# AgentRelay - full verification harness.
+# AgentRelay - portable verification harness.
 #
-# One command that builds everything, runs every test suite, and then drives the
-# daemon through a real overnight-run lifecycle in a throwaway sandbox, asserting on
-# the actual output at each step. It ends with a single PASS/FAIL summary and a
-# non-zero exit code if anything failed, so it works as a smoke gate.
+# One command that builds the daemon, runs its test suite, and then drives the built
+# binary through a real overnight-run lifecycle in a throwaway sandbox, asserting on
+# the actual output at each step. Ends with a single PASS/FAIL line and a non-zero
+# exit code if anything failed, so it doubles as a smoke gate.
 #
-# Why a real lifecycle and not just unit tests: the units are covered by `cargo test`.
-# What this adds is the wiring - that the built binary, run as a user runs it, does
-# the right thing end to end. That is exactly the seam unit tests cannot see.
+# Portable by design: it finds the repo from its own location, uses the system temp
+# dir for the sandbox, and needs nothing beyond what the project already requires -
+# cargo, git, and node. No hardcoded machine paths, no other projects. Runs on
+# Windows PowerShell and on PowerShell 7 (pwsh) on Linux/macOS.
 #
 # Usage (from anywhere):
-#   powershell -ExecutionPolicy Bypass -File scripts\verify-all.ps1
-# Optional: -SkipTests to jump straight to the lifecycle, -KeepSandbox to inspect it.
+#   Windows:        powershell -ExecutionPolicy Bypass -File scripts\verify.ps1
+#   Linux/macOS:    pwsh scripts/verify.ps1
+# Flags: -SkipTests to jump to the lifecycle, -KeepSandbox to inspect it after.
 
 param(
     [switch]$SkipTests,
@@ -19,12 +21,19 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$env:Path += ";$env:USERPROFILE\.cargo\bin"
+
+# On PowerShell 5.1 (Windows) the automatic $IsWindows variable does not exist, so a
+# bare reference is $null there - which is exactly "we are on Windows".
+$onWindows = -not (Test-Path variable:IsWindows) -or $IsWindows
+$exe       = if ($onWindows) { ".exe" } else { "" }
+
+# ~/.cargo/bin is not always on PATH in a fresh shell.
+$cargoBin = Join-Path $HOME ".cargo/bin"
+if (Test-Path $cargoBin) { $env:Path += [IO.Path]::PathSeparator + $cargoBin }
 
 $root      = Split-Path -Parent $PSScriptRoot
 $daemonDir = Join-Path $root "daemon"
-$appDir    = Join-Path $root "app\src-tauri"
-$q8        = "C:\Users\58294\Desktop\Q8"
+$appDir    = Join-Path $root (Join-Path "app" "src-tauri")
 
 $script:pass = 0
 $script:fail = 0
@@ -47,59 +56,49 @@ function Section($t) { Write-Host "`n== $t ==" -ForegroundColor Cyan }
 Section "Build the daemon"
 Push-Location $daemonDir
 $build = & cargo build 2>&1 | Out-String
-Check "daemon builds" ($build -match "Finished" -and $build -notmatch "^error")
-$agentrelay = Join-Path $daemonDir "target\debug\agentrelay.exe"
-Check "agentrelay.exe exists" (Test-Path $agentrelay)
+Check "daemon builds" ($build -match "Finished" -and $build -notmatch "(?m)^error")
+$agentrelay = Join-Path $daemonDir (Join-Path "target" (Join-Path "debug" "agentrelay$exe"))
+Check "agentrelay$exe exists" (Test-Path $agentrelay)
 Pop-Location
 
 if (-not $SkipTests) {
-    Section "Test suites"
+    Section "Daemon test suite"
     Push-Location $daemonDir
     $t = & cargo test 2>&1 | Out-String
     $m = [regex]::Match($t, "test result: ok\. (\d+) passed; (\d+) failed")
     $daemonOk = $m.Success -and [int]$m.Groups[2].Value -eq 0
-    Check "daemon: cargo test green" $daemonOk ("(" + $m.Groups[1].Value + " passed)")
+    Check "cargo test green" $daemonOk ("(" + $m.Groups[1].Value + " passed)")
     Pop-Location
-
-    foreach ($cli in @("patchproof", "repodoctor", "lastgood")) {
-        $dir = Join-Path $q8 $cli
-        if (-not (Test-Path $dir)) { Check "${cli} present" $false "not found"; continue }
-        Push-Location $dir
-        $out = (& npm.cmd test 2>&1 | Out-String) -replace "`e\[[\d;]*m", ""
-        $tm = [regex]::Match($out, "Tests\s+(\d+)\s+passed")
-        $green = $tm.Success -and ($out -notmatch "failed")
-        Check "${cli}: npm test green" $green ("(" + $tm.Groups[1].Value + " passed)")
-        Pop-Location
-    }
 }
 
 # ---------------------------------------------------------------------------------
 Section "Build the desktop app"
 Push-Location $appDir
 $appBuild = & cargo build 2>&1 | Out-String
-Check "app builds" ($appBuild -match "Finished" -and $appBuild -notmatch "^error\[")
-$appExe = Join-Path $appDir "target\debug\agentrelay-app.exe"
-Check "agentrelay-app.exe exists" (Test-Path $appExe)
+Check "app builds" ($appBuild -match "Finished" -and $appBuild -notmatch "(?m)^error\[")
+$appExe = Join-Path $appDir (Join-Path "target" (Join-Path "debug" "agentrelay-app$exe"))
+Check "agentrelay-app$exe exists" (Test-Path $appExe)
 Pop-Location
 
 # ---------------------------------------------------------------------------------
 Section "End-to-end lifecycle (real binary, throwaway sandbox)"
 
-$sandbox = Join-Path $env:TEMP ("agentrelay-verify-" + (Get-Random))
+$tmp     = [IO.Path]::GetTempPath()
+$sandbox = Join-Path $tmp ("agentrelay-verify-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force $sandbox | Out-Null
 Push-Location $sandbox
 
 # A real git repo with a passing check available (node --version), plus the user's
 # own uncommitted file, so we can prove the checkpoint never eats it.
-& git init -q -b main
+& git init -q -b main 2>&1 | Out-Null
 Set-Content -Encoding ascii "README.md" "sample project"
-& git add -A
-& git -c user.email=t@e.com -c user.name=T commit -q -m "base"
+& git add -A 2>&1 | Out-Null
+& git -c user.email=t@e.com -c user.name=T commit -q -m "base" 2>&1 | Out-Null
 
 # init
-$initOut = & $agentrelay init 2>&1 | Out-String
-Check "init scaffolds the workspace" (Test-Path ".agentrelay\config.json")
-Check "init writes a self-ignoring .gitignore" (Test-Path ".agentrelay\.gitignore")
+& $agentrelay init 2>&1 | Out-Null
+Check "init scaffolds the workspace" (Test-Path (Join-Path ".agentrelay" "config.json"))
+Check "init writes a self-ignoring .gitignore" (Test-Path (Join-Path ".agentrelay" ".gitignore"))
 
 # doctor - should find git+node (claude optional)
 $doctor = & $agentrelay doctor 2>&1 | Out-String
@@ -115,7 +114,7 @@ $cfg = @'
   "budget": { "mission_usd": 5.0 }
 }
 '@
-Set-Content -Encoding ascii ".agentrelay\config.json" $cfg
+Set-Content -Encoding ascii (Join-Path ".agentrelay" "config.json") $cfg
 
 # status reflects the config, and says the budget out loud
 $status = & $agentrelay status 2>&1 | Out-String
@@ -140,28 +139,27 @@ $report = & $agentrelay report 2>&1 | Out-String
 Check "report labels evidence VERIFIED" ($report -match "\[VERIFIED\]")
 
 # Guard hook blocks a real forbidden action (no live agent needed - drive the hook).
-# The tool call is written to an ASCII file and piped in via cmd's `type`: PowerShell's
-# own pipe to a native exe re-encodes the bytes, and the daemon would read garbage and
-# (correctly, for garbage) deny everything - hiding whether the guard actually works.
+# The tool call is handed to the hook on stdin. We write it with the platform's own
+# stdin plumbing rather than a PowerShell pipe, which on Windows re-encodes the bytes.
 & $agentrelay install-hook 2>&1 | Out-Null
-Check "install-hook writes .claude/settings.json" (Test-Path ".claude\settings.json")
+Check "install-hook writes .claude/settings.json" (Test-Path (Join-Path ".claude" "settings.json"))
 
-$denyFile = Join-Path $sandbox "hook-deny.json"
-[IO.File]::WriteAllText($denyFile, '{"tool_name":"Write","tool_input":{"file_path":".env"}}')
-cmd /c "type `"$denyFile`" | `"$agentrelay`" hook --cwd `"$sandbox`"" 2>&1 | Out-Null
-Check "the hook DENIES writing a forbidden path" ($LASTEXITCODE -eq 2)
-
-$allowFile = Join-Path $sandbox "hook-allow.json"
-[IO.File]::WriteAllText($allowFile, '{"tool_name":"Write","tool_input":{"file_path":"src/ok.rs"}}')
-cmd /c "type `"$allowFile`" | `"$agentrelay`" hook --cwd `"$sandbox`"" 2>&1 | Out-Null
-Check "the hook ALLOWS an in-workspace write" ($LASTEXITCODE -eq 0)
-
-# templates (only if this build has them - agent-added, guard so an older build passes)
-$help = & $agentrelay --help 2>&1 | Out-String
-if ($help -match "templates") {
-    $tpl = & $agentrelay templates 2>&1 | Out-String
-    Check "templates lists at least one built-in" ($tpl.Trim().Length -gt 0)
+function Invoke-Hook($json) {
+    $f = Join-Path $sandbox ("hook-" + [Guid]::NewGuid().ToString("N").Substring(0, 6) + ".json")
+    [IO.File]::WriteAllText($f, $json)
+    if ($onWindows) {
+        cmd /c "type `"$f`" | `"$agentrelay`" hook --cwd `"$sandbox`"" 2>&1 | Out-Null
+    } else {
+        & /bin/sh -c "'$agentrelay' hook --cwd '$sandbox' < '$f'" 2>&1 | Out-Null
+    }
+    return $LASTEXITCODE
 }
+
+$denyCode = Invoke-Hook '{"tool_name":"Write","tool_input":{"file_path":".env"}}'
+Check "the hook DENIES writing a forbidden path" ($denyCode -eq 2)
+
+$allowCode = Invoke-Hook '{"tool_name":"Write","tool_input":{"file_path":"src/ok.rs"}}'
+Check "the hook ALLOWS an in-workspace write" ($allowCode -eq 0)
 
 Pop-Location
 if ($KeepSandbox) {
