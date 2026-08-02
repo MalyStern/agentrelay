@@ -220,6 +220,14 @@ pub fn build(store: &Store, mission_id: &str, cwd: &str, saved_bytes: usize) -> 
             });
             continue;
         }
+        if e.kind == "fixloop.gave_up" {
+            let reason = e.payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            lines.push(Line {
+                provenance: Provenance::Recorded,
+                text: format!("the fix loop stopped and left this for you — {reason}"),
+            });
+            continue;
+        }
         if e.kind == "drift.detected" {
             let summary = e.payload.get("summary").and_then(|v| v.as_str()).unwrap_or("");
             lines.push(Line {

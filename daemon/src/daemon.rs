@@ -50,6 +50,9 @@ pub struct Config {
     /// is not checked, and the report says so rather than implying it was clean.
     #[serde(default)]
     pub scope: crate::drift::UnitScope,
+    /// How hard to try fixing a red build before asking a person.
+    #[serde(default)]
+    pub fix_loop: crate::fixloop::FixLoopConfig,
 }
 
 impl Default for Config {
@@ -67,6 +70,7 @@ impl Default for Config {
             budget: crate::cost::Budget::default(),
             isolation: crate::isolation::Isolation::default(),
             scope: crate::drift::UnitScope::default(),
+            fix_loop: crate::fixloop::FixLoopConfig::default(),
         }
     }
 }
@@ -308,6 +312,64 @@ impl Daemon {
     /// looking like a safe point to return to; checkpointing on evidence means every
     /// commit in the morning is a state that actually built. When the gate fails
     /// nothing is committed — the work stays in the tree, visible and undone.
+    /// Run the checks and, while they fail, drive the agent to fix them.
+    ///
+    /// Returns when the checks pass, or when the loop decides a person is needed —
+    /// at which point the mission moves to `waiting_input` rather than spinning.
+    /// Retrying forever is the failure that makes people stop leaving these things
+    /// running overnight.
+    pub async fn fix_until_green(
+        &self,
+        mission_id: &str,
+        unit_id: &str,
+        cwd: &str,
+    ) -> FixLoopOutcome {
+        let mut attempt = 0u32;
+        let mut previous: Option<String> = None;
+        let mut rounds = Vec::new();
+
+        loop {
+            let results = self.run_validators(unit_id, cwd).await;
+            let decision = crate::fixloop::decide(
+                &self.config.fix_loop,
+                &results,
+                attempt,
+                previous.as_deref(),
+            );
+            rounds.push(crate::fixloop::failure_signature(&results));
+
+            match decision {
+                crate::fixloop::LoopDecision::Done => {
+                    return FixLoopOutcome { green: true, attempts: attempt, gave_up: None }
+                }
+                crate::fixloop::LoopDecision::GiveUp { reason } => {
+                    let _ = self.store.append_event(&crate::store::AppendEvent {
+                        mission_id: Some(mission_id.to_string()),
+                        actor: "fixloop".into(),
+                        kind: "fixloop.gave_up".into(),
+                        payload: serde_json::json!({ "unit": unit_id, "reason": reason }),
+                        seq_in_turn: None,
+                    });
+                    // A person has to look now. Say so in the state, so nothing
+                    // downstream mistakes this for work still in progress.
+                    let _ = self.transition(mission_id, crate::state::MissionState::WaitingInput, &reason);
+                    return FixLoopOutcome { green: false, attempts: attempt, gave_up: Some(reason) };
+                }
+                crate::fixloop::LoopDecision::Retry { attempt: next, prompt } => {
+                    previous = rounds.last().cloned();
+                    attempt = next;
+                    if let Err(e) = self.run_turn(mission_id, &prompt, cwd).await {
+                        // The turn itself could not run (budget, isolation, no
+                        // agent). That is not something more attempts will fix.
+                        let reason = format!("could not run a fix attempt: {e}");
+                        let _ = self.transition(mission_id, crate::state::MissionState::WaitingInput, &reason);
+                        return FixLoopOutcome { green: false, attempts: attempt, gave_up: Some(reason) };
+                    }
+                }
+            }
+        }
+    }
+
     /// Where this mission is. `Draft` when nothing has been recorded yet.
     pub fn mission_state(&self, mission_id: &str) -> crate::state::MissionState {
         self.store
@@ -508,6 +570,15 @@ impl Daemon {
         }
         decision
     }
+}
+
+/// What the fix loop achieved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FixLoopOutcome {
+    pub green: bool,
+    pub attempts: u32,
+    /// Set when the loop stopped and handed over to a person.
+    pub gave_up: Option<String>,
 }
 
 /// The result of finishing a unit: what the evidence said, and what was recorded.
@@ -966,6 +1037,49 @@ mod tests {
         assert!(report.contains("[ESTIMATED]"), "labelled a guess, not evidence: {report}");
         assert!(!report.contains("asked_for.rs"), "in-scope work is not flagged: {report}");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_green_build_needs_no_fix_attempts() {
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "validators": [{ "kind": "tests", "command": "node --version" }] }).to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        let out = d.fix_until_green("m1", "u1", &cwd).await;
+        assert!(out.green);
+        assert_eq!(out.attempts, 0, "nothing to fix, so nothing was spent");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_loop_hands_over_to_a_person_instead_of_burning_the_night() {
+        // The failure this exists to prevent: eleven identical attempts, each
+        // costing quota and money, and nothing moved by morning.
+        let (root, cwd) = tmp_repo();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({
+                "program": "definitely-not-a-real-agent-xyz",
+                "validators": [{ "kind": "tests", "command": "this-command-does-not-exist-xyz" }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        d.transition("m1", crate::state::MissionState::Running, "night started").unwrap();
+
+        let out = d.fix_until_green("m1", "u1", &cwd).await;
+        assert!(!out.green);
+        assert!(out.gave_up.is_some(), "it must stop, not spin");
+        // And the state says a person is needed — not "still working".
+        assert_eq!(d.mission_state("m1"), crate::state::MissionState::WaitingInput);
+        assert!(d.status().waiting_for_you);
         let _ = std::fs::remove_dir_all(&root);
     }
 

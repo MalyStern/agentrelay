@@ -302,6 +302,23 @@ scope, and reports each file once. Shows as [ESTIMATED] in the morning report.
 NEXT (Phase-2): VCS/CI loop (red CI -> auto-fix). Then Phase-3/4: Codex adapter,
 ACP generic, Tauri UI, i18n.
 
+FIX LOOP (2026-08-02) - Phase-2 complete. fixloop.rs + Daemon::fix_until_green +
+`agentrelay fix`. Red checks -> targeted fix prompt built from the ACTUAL failure
+output -> recheck. Two brakes for two different failures: a hard attempt cap (3)
+bounds a problem that cannot be fixed from here, and a no-progress check stops the
+moment two attempts fail the SAME way - ten different failures is progress, the
+same failure twice is a loop. failure_signature strips digits so line numbers and
+durations do not make one failure look like two (without that the stuck-detector
+never fires). Giving up moves the mission to waiting_input, so nothing downstream
+mistakes it for work in progress. The fix prompt forbids editing tests/disabling
+checks/widening scope and says 'stop and say so' is a better answer than a green
+build that means nothing. 209 cargo tests.
+
+PHASE-2 IS DONE: mission state machine, Isolation-Ring (live-verified), cost ledger
++ budget kill-switch, drift (layer-3), fix loop. Phase-1 complete earlier.
+NEXT (Phase-3): Codex adapter (app-server JSON-RPC), ACP generic adapter. Phase-4:
+Tauri UI, 23-language i18n.
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.

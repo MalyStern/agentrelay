@@ -17,6 +17,7 @@ pub mod daemon;
 pub mod drift;
 pub mod error;
 pub mod events;
+pub mod fixloop;
 pub mod guard;
 pub mod hook;
 pub mod ipc;

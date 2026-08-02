@@ -78,6 +78,15 @@ enum Cmd {
         #[arg(long, default_value = "default")]
         unit: String,
     },
+    /// Run the checks and keep fixing until they pass (or a person is needed).
+    Fix {
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        #[arg(long, default_value = "default")]
+        mission: String,
+        #[arg(long, default_value = "default")]
+        unit: String,
+    },
     /// List the checkpoints the supervisor made, newest first.
     Checkpoints {
         #[arg(long, default_value = ".")]
@@ -388,6 +397,24 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 return Err(r.headline());
             }
             Ok(())
+        }
+        Cmd::Fix { cwd, mission, unit } => {
+            let d = Daemon::open(root).map_err(|e| e.to_string())?;
+            let out = d.fix_until_green(&mission, &unit, &cwd).await;
+            if out.green {
+                if out.attempts == 0 {
+                    println!("Already green — nothing to fix.");
+                } else {
+                    println!("Green after {} fix attempt(s).", out.attempts);
+                }
+                return Ok(());
+            }
+            let why = out.gave_up.unwrap_or_else(|| "unknown".into());
+            println!("Stopped after {} attempt(s).", out.attempts);
+            println!("  {why}");
+            println!();
+            println!("The mission is now `waiting_input`: it will not continue by itself.");
+            Err("the checks are still failing — a person is needed".to_string())
         }
         Cmd::Checkpoints { cwd, limit } => {
             let list = agentrelay::checkpoint::list(&cwd, limit).map_err(|e| e.to_string())?;
