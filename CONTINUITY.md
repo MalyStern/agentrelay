@@ -406,6 +406,31 @@ Three sub-agents ran Phase-4 polish in parallel (disjoint dirs, no conflict):
 daemon Phase-4 (cloud/calendar/templates - cloud.rs already landed), the 3 CLIs,
 and the ui/ visual pass. Awaiting their reports.
 
+FULL VERIFICATION (2026-08-02): scripts/verify-all.ps1 runs 22 checks end to end -
+22/22 GREEN. Builds daemon+app, all four test suites pass (daemon cargo 277,
+patchproof 53, repodoctor 50, lastgood 44), and the built binary is driven through
+a real lifecycle in a throwaway sandbox: init, doctor, a real validator, the
+checkpoint that commits ONLY the agent's file and leaves the user's own uncommitted,
+the report's VERIFIED labels, and the guard hook denying .env / allowing src/**.
+Two harness bugs found and fixed (a $-in-regex and PowerShell mangling piped stdin -
+NOT product bugs; the product paths were separately proven).
+
+AGENT TEAM (Phase-4, all verified by me, all pushed):
+  - daemon: cloud.rs (delegated, honestly NOT supervised), calendar.rs (schedule
+    around quiet hours), templates.rs (init --template). +35 tests -> 275, then 277
+    with my CORS tests.
+  - 3 CLIs: each got a real fail-quiet bug fixed (patchproof bad --since blamed the
+    repo; repodoctor said 'Ready' when package.json wouldn't parse; lastgood
+    discarded a corrupt baseline as 'never marked'). 53/50/44 green.
+  - ui: wired GET /report, verified with REAL headless-Chrome pixels (all 5
+    scenarios, 320px, dark, greyscale). Found the CORS gap I then fixed in ipc.rs.
+
+STATE: Phases 1-4 built and verified. Desktop app (Tauri) launches. Test
+environment: `scriptserify-all.ps1` (22 checks) + `scripts\make-sandbox.ps1`
+(a real demo workspace on the Desktop). Still needs a human: one real overnight run
+vs a live Claude (quota-reset behaviour), a look at the app's pixels, native-speaker
+review of 5 languages, and publishing (npm login on your machine).
+
 ## Done log (most recent first)
 
 - 2026-07-28: Rust daemon — events/provider/error/adapter/guard/quota/send_gate/store/claude_stream/fake_adapter/claude_adapter ALL built+tested (44 cargo tests). Real subprocess works; MissionRunner supervises end-to-end (guards+quota+store). Store=bundled rusqlite; async=tokio.
