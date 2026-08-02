@@ -154,6 +154,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!();
             println!("{}", s.notifications);
             println!();
+            println!("{}", s.cloud);
+            println!();
             println!("{} Spent so far: ${:.2}.", s.budget, s.spent_usd);
             Ok(())
         }

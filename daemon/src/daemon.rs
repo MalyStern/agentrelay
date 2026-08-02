@@ -53,6 +53,11 @@ pub struct Config {
     /// How hard to try fixing a red build before asking a person.
     #[serde(default)]
     pub fix_loop: crate::fixloop::FixLoopConfig,
+    /// Delegate a task to a hosted agent instead of running it locally. Off by
+    /// default, and — unlike a local run — NOT covered by the guards, checkpoints or
+    /// budget cap; `status` states that limitation plainly.
+    #[serde(default)]
+    pub cloud: crate::cloud::CloudConfig,
 }
 
 impl Default for Config {
@@ -71,6 +76,7 @@ impl Default for Config {
             isolation: crate::isolation::Isolation::default(),
             scope: crate::drift::UnitScope::default(),
             fix_loop: crate::fixloop::FixLoopConfig::default(),
+            cloud: crate::cloud::CloudConfig::default(),
         }
     }
 }
@@ -93,6 +99,9 @@ pub struct StatusReport {
     pub waiting_for_you: bool,
     /// In plain words: whether the agent is contained, and what it can reach.
     pub isolation: String,
+    /// In plain words: whether tasks are delegated to a hosted agent, and the fact
+    /// that such a run is NOT supervised.
+    pub cloud: String,
 }
 
 const DIR: &str = ".agentrelay";
@@ -201,6 +210,7 @@ impl Daemon {
             state_meaning: st.describe().to_string(),
             waiting_for_you: st.needs_a_person(),
             isolation: self.config.isolation.describe(),
+            cloud: self.config.cloud.describe(),
         }
     }
 

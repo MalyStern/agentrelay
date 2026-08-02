@@ -11,6 +11,7 @@ pub mod adapter;
 pub mod checkpoint;
 pub mod claude_adapter;
 pub mod claude_stream;
+pub mod cloud;
 pub mod codex;
 pub mod context;
 pub mod fake_adapter;
