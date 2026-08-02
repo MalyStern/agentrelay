@@ -1,36 +1,112 @@
 # AgentRelay
 
-**Run AI coding agents overnight, unattended — and actually keep control.** A local, single-source-of-truth daemon that supervises Claude Code / Codex / ACP agents through quota resets, enforces guardrails, checkpoints work, and stops when it should — with everything it shows you tagged by provenance (**Measured** / **Estimated** / **Provider**).
+**Run an AI coding agent overnight, unattended — and keep control.** AgentRelay is a
+local supervisor for Claude Code (and Codex / any ACP agent). It blocks a forbidden
+tool call *before* it runs, refuses to call work "done" without a passing test suite,
+checkpoints every validated unit into git so a bad night is one command to undo, caps
+spending, and writes a morning report where **every line says where it came from** —
+so you can tell evidence from a guess at 8am.
 
-> Status: **early build.** See [`STATUS.md`](STATUS.md) for exactly what's implemented-and-tested vs scaffolded. The authoritative design is [`docs/02-תוכנית-סופית.md`](docs/02-תוכנית-סופית.md) (the final plan, hardened by three adversarial review passes).
+Everything runs on your machine. No account, no telemetry, nothing uploaded.
 
-## Why it exists
+## The idea in one line
 
-Autonomous overnight agent runs fail in specific, well-understood ways: the quota resets mid-task and the agent restarts from scratch (or drifts), a stray `push`/`deploy` slips through, "stop" doesn't actually kill the Docker/WSL children, secrets end up on disk, and the machine falls asleep at 2am. AgentRelay is the supervisor that handles each of those deterministically, so a long task survives the night.
+An overnight agent run fails in known ways — it drifts onto the wrong problem, a stray
+`git push` slips out, "stop" doesn't really stop, it burns the night repeating one
+broken fix, or it claims success it can't prove. AgentRelay handles each of those
+**deterministically**, and never presents a guess as a fact.
 
-## Architecture (target)
+## What it does
 
-- **Daemon** — Rust + tokio, the single source of truth (Mission Engine, Scheduler, Policy/Watchtower, Quota Manager, Process Manager, Timeline, Credential Broker, Isolation Manager, Context Optimizer). Storage: SQLite (WAL), hybrid append-only-log + state-tables.
-- **UI** — Tauri 2 + React/TS, `i18next`+ICU, RTL + a11y, 23 languages.
-- **Provider engines** — Node subprocesses behind one normalized contract: Claude **Agent SDK** + Hooks, Codex **App-Server** JSON-RPC, generic **ACP** (~10 agents), and **Cloud-delegated** (Devin / Copilot Agent-Tasks).
+| | |
+|---|---|
+| 🛡️ **Guards that block** | A PreToolUse hook stops a forbidden call (a push, a write outside the workspace, touching `.env`) *before* it runs — verified against a live Claude, not just in theory. |
+| ✅ **Evidence-gated "done"** | A unit is done only when your real validators (`npm test`, `cargo test`, …) pass. The tool's exit code decides, not the model's claim. |
+| 📌 **Undoable checkpoints** | Each passing unit is a git commit authored as AgentRelay — and it commits **only the agent's work**, never your own uncommitted edits. Undo is `git reset --keep`, which refuses rather than discards. |
+| 💰 **Budget kill-switch** | A spending cap checked *before* each turn. Money is the one thing git can't restore. |
+| 🌙 **Survives the night** | Reads the quota reset time to schedule around the wall, keeps the machine awake, and resumes without re-reading the whole repo. |
+| 📊 **A report you can trust** | Every line tagged **VERIFIED** (a command decided it) / **RECORDED** (observed) / **ESTIMATED** (a rule of thumb). Nothing the model merely claimed appears. |
+| 🐳 **Optional isolation** | Run the agent in a container with the network off by default — the one layer that doesn't depend on recognising a command. |
 
-The single principle throughout: **detect facts, never guess** — and every surfaced value carries its provenance.
+## How to use it
 
-## Repo layout
+**As a Claude Code plugin** (installing it installs the guards):
 
 ```
-docs/          the design (00 master · 01 context-optimizer · 02 FINAL plan) + ADRs
-runner/        Node/TS: normalized contracts + provider adapters + Phase-0 test harness  ← built & tested here
-daemon/        Rust workspace (the orchestration core)                                    ← scaffolded (see ADR-0001)
+/plugin marketplace add MalyStern/agentrelay
+/plugin install agentrelay@malystern
 ```
 
-**Why the split:** this build environment can't install the Rust toolchain (TLS-intercepted downloads fail), and the plan's own rule is *don't write what you can't verify*. So the verifiable half — the language-neutral contracts, the Node-native adapters the daemon spawns, and the test harness that makes `resume`/`kill`/rate-limit testable without burning quota — is built and tested here in TypeScript, acting as an **executable spec** for the Rust port. Details: [`docs/adr/0001-environment-and-language-split.md`](docs/adr/0001-environment-and-language-split.md).
-
-## Develop (runner)
+The plugin ships the PreToolUse guard, slash commands (`/agentrelay:status`,
+`:report`, `:done`, …), a skill that teaches the safe workflow, and a dependency-free
+MCP server. It needs the engine binary once:
 
 ```bash
-cd runner
-npm install
-npm test        # vitest — the Phase-0 contract + fake-adapter + record/replay suite
-npm run typecheck
+cargo install --path daemon    # puts `agentrelay` on your PATH
 ```
+
+**As a CLI:**
+
+```bash
+agentrelay init                       # scaffold .agentrelay/config.json
+#   edit it: guards, your real validators, a budget, the scope
+agentrelay begin --unit u1            # record the tree before the agent works
+#   ... the agent does the unit ...
+agentrelay done "unit 1" --unit u1    # validate → checkpoint only if it passes
+agentrelay report                     # the morning report, every line sourced
+```
+
+**As a desktop app** — a native window (Tauri) that starts the daemon and reads the
+report for you, no terminal, no token to paste (`app/`).
+
+## Status — honest
+
+Phases 1–4 are **built and tested: 282 Rust tests**, plus a full end-to-end
+verification harness (`scripts/verify-all.ps1`, 22 checks) that drives the real binary
+through init → validate → the checkpoint-safety → the report → the guard actually
+denying a `.env` write. The desktop app builds and launches; the plugin's hook was
+verified blocking a live Claude tool call.
+
+What still needs a human: one real overnight run against a live Claude to confirm the
+quota-reset resume behaviour end-to-end (it's tested against a fake agent and the real
+stream format, but not a full live night), a visual pass over the app, and
+native-speaker review of the non-English message catalogues. See
+[`CONTINUITY.md`](CONTINUITY.md) for the detailed state.
+
+## Layout
+
+```
+daemon/    the Rust supervisor — the product. 282 tests.
+app/       the Tauri desktop app (native window over the daemon's local API)
+plugin/    the Claude Code plugin (hook + commands + skill + MCP server)
+ui/        a standalone browser UI (demo mode + live)
+i18n/      message catalogue, 7 languages, with a bidi/plural validator
+scripts/   verify-all.ps1 (full harness) + make-sandbox.ps1 (a ready demo workspace)
+docs/      the authoritative design (Hebrew) + ADRs
+```
+
+Build and verify everything:
+
+```bash
+cd daemon && cargo test          # the core, 282 tests
+powershell -File scripts/verify-all.ps1   # builds + all suites + a real lifecycle
+```
+
+## Design principle
+
+**Detect facts, never guess** — and make every gap loud, once, rather than failing
+quietly. A supervisor you can't audit is a supervisor you have to redo by hand, so the
+report is sourced, an unset cap says so out loud, a missing measurement is "not
+measured" and never 0, and a guard that can't be armed says so instead of pretending.
+
+## License
+
+MIT.
+
+---
+
+<sub>Keywords: supervise Claude Code overnight, autonomous AI coding agent guardrails,
+PreToolUse hook block, evidence-gated agent completion, git checkpoint AI agent work,
+budget cap for AI agents, Claude Code plugin, MCP server, ACP agent supervision, Codex
+exec supervisor, quota-reset resume, local-first no-telemetry agent runner, Rust +
+Tauri.</sub>
