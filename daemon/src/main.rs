@@ -66,6 +66,9 @@ enum Cmd {
         /// Print only the one-line headline (for a phone / a status bar).
         #[arg(long)]
         short: bool,
+        /// Also push the headline to the configured notifier (off unless set).
+        #[arg(long)]
+        notify: bool,
     },
     /// Start the loopback IPC server (for a UI / remote control).
     Serve {
@@ -105,6 +108,8 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             println!("  missions:    {}", s.missions);
             println!("  engine:      {}", s.program);
             println!("  keep-awake:  {}", s.keep_awake);
+            println!();
+            println!("{}", s.notifications);
             Ok(())
         }
         Cmd::Run { prompt, cwd, mission } => {
@@ -186,7 +191,7 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Report { cwd, mission, short } => {
+        Cmd::Report { cwd, mission, short, notify } => {
             let d = Daemon::open(root).map_err(|e| e.to_string())?;
             let r = d.morning_report(&mission, &cwd);
             if short {
@@ -194,6 +199,20 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
             } else {
                 print!("{}", r.render());
             }
+            if notify {
+                match d.notify_report(&r) {
+                    Ok(true) => println!("\n(headline pushed to your notifier)"),
+                    Ok(false) => println!(
+                        "\n(--notify given, but notifications are off — set `notify` in \
+                         .agentrelay/config.json; nothing was sent)"
+                    ),
+                    // Report the delivery failure, but never let it decide the exit
+                    // code: whether the night succeeded has nothing to do with
+                    // whether a phone server answered.
+                    Err(e) => eprintln!("\nnotification failed (the report above still stands): {e}"),
+                }
+            }
+
             // A night with failed units exits non-zero: the report is meant to be
             // usable from a script that decides whether to wake someone.
             if r.units_failed > 0 {

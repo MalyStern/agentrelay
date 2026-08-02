@@ -108,8 +108,18 @@ whole stdout, which eats the leading column of porcelain's FIRST line, so the fi
 modified file's path lost a character (".agentrelay/x" -> "agentrelay/x").
 100 cargo tests.
 
-NEXT: push notifications (ntfy/Telegram) so the headline reaches a phone; then
-Phase-2 (Mission-Contract state machine, Isolation-Ring, cost ledger).
+PUSH NOTIFICATIONS (2026-08-02): notify.rs — ntfy (needs no account, self-hostable).
+THE ONLY outbound network path in the daemon, NotifyConfig::None by default, and
+`agentrelay status` prints describe_privacy() saying in plain words exactly what
+would leave the machine (headline only — never file contents, diffs, prompts or
+paths; the API takes a headline, not a report, so there is no accidental path).
+Warns that a public ntfy.sh topic is readable by anyone who guesses it. Tested
+against a REAL local TcpListener that captures the actual HTTP request — do
+smoke tests that way too, not against ntfy.sh. 109 cargo tests.
+
+NEXT: Telegram (two-way approve/abort) needs the credential broker for the bot
+token — never in config.json. Then Phase-2: Mission-Contract state machine,
+Isolation-Ring, cost ledger + budget kill-switch.
 
 ## Done log (most recent first)
 

@@ -21,6 +21,7 @@ pub mod keepawake;
 pub mod mission;
 pub mod process;
 pub mod provider;
+pub mod notify;
 pub mod quota;
 pub mod report;
 pub mod send_gate;

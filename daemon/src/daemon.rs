@@ -35,6 +35,10 @@ pub struct Config {
     /// passes. Empty = no evidence required (not recommended for autopilot).
     #[serde(default)]
     pub validators: Vec<crate::validator::Validator>,
+    /// Where to send a notification when the night ends or a unit fails. The only
+    /// outbound network path in the daemon, and `None` by default.
+    #[serde(default)]
+    pub notify: crate::notify::NotifyConfig,
 }
 
 impl Default for Config {
@@ -48,6 +52,7 @@ impl Default for Config {
             ],
             keep_awake: true,
             validators: vec![],
+            notify: crate::notify::NotifyConfig::None,
         }
     }
 }
@@ -59,6 +64,8 @@ pub struct StatusReport {
     pub missions: i64,
     pub keep_awake: bool,
     pub program: String,
+    /// In plain words: what, if anything, leaves this machine.
+    pub notifications: String,
 }
 
 const DIR: &str = ".agentrelay";
@@ -159,7 +166,27 @@ impl Daemon {
             missions: self.store.count_missions().unwrap_or(0),
             keep_awake: self.config.keep_awake,
             program: self.config.program.clone(),
+            notifications: self.config.notify.describe_privacy(),
         }
+    }
+
+    /// Send the report headline, if — and only if — notifications are configured.
+    ///
+    /// A delivery failure is returned, never propagated into the run: a night's
+    /// work must not be lost because a phone server was unreachable.
+    pub fn notify_report(&self, r: &crate::report::MorningReport) -> Result<bool> {
+        if !self.config.notify.is_enabled() {
+            return Ok(false);
+        }
+        let urgency = if r.units_failed > 0 {
+            crate::notify::Urgency::Attention
+        } else {
+            crate::notify::Urgency::Quiet
+        };
+        // The headline only. Never r.render(), which names files.
+        let n = crate::notify::Notification::new("AgentRelay", r.headline(), urgency);
+        crate::notify::from_config(&self.config.notify).send(&n)?;
+        Ok(true)
     }
 
     /// Run one supervised turn against a given adapter (testable with the fake).
@@ -535,6 +562,39 @@ mod tests {
             let edited = d.observe_read(&mut book, "m1", "src/big.rs", b"different now", 2);
             assert!(edited.should_send(), "a changed file is always re-sent");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn notifications_are_off_unless_the_user_turns_them_on() {
+        // The daemon's one outbound network path. A default that phoned home would
+        // break the promise the whole product is built on.
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        let d = Daemon::open(&root).unwrap();
+        assert!(!d.config().notify.is_enabled());
+        assert!(d.status().notifications.contains("Nothing leaves this machine"));
+
+        // With notifications off, asking to notify sends nothing and says so.
+        let r = d.morning_report("m1", root.to_str().unwrap());
+        assert_eq!(d.notify_report(&r).unwrap(), false);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn enabling_notifications_states_exactly_what_would_be_sent() {
+        let root = tmp();
+        Daemon::init(&root).unwrap();
+        std::fs::write(
+            Daemon::config_path(&root),
+            json!({ "notify": { "kind": "ntfy", "topic": "my-topic" } }).to_string(),
+        )
+        .unwrap();
+        let d = Daemon::open(&root).unwrap();
+        assert!(d.config().notify.is_enabled());
+        let shown = d.status().notifications;
+        assert!(shown.contains("my-topic"), "{shown}");
+        assert!(shown.contains("No file contents"), "{shown}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
