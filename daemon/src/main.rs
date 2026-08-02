@@ -585,6 +585,33 @@ async fn run(cli: Cli, root: &std::path::Path) -> Result<(), String> {
                 }
                 (None, None) => {}
             }
+            // If this workspace asks for a knowledge graph after a run, refresh it now
+            // so it's ready for the morning. Honest either way: requested-but-missing
+            // is said out loud, and graphify is never installed automatically.
+            let gcfg = d.config().graph.clone();
+            if gcfg.after_run {
+                if agentrelay::graph::graphify_available() {
+                    println!(
+                        "\nRefreshing the knowledge graph ({}) …",
+                        if gcfg.deep {
+                            "graphify extract — spends tokens"
+                        } else {
+                            "graphify update — no token cost"
+                        }
+                    );
+                    let g = agentrelay::graph::build_graph(std::path::Path::new(&cwd), &gcfg);
+                    println!("  {}", g.note);
+                    if let Some(p) = &g.html {
+                        println!("  open: {p}");
+                    }
+                } else {
+                    println!(
+                        "\nA knowledge graph was requested (graph.after_run) but graphify is not \
+                         installed, so none was built —"
+                    );
+                    println!("  {}", agentrelay::graph::install_hint());
+                }
+            }
             Ok(())
         }
         Cmd::Graph { cwd, deep } => {

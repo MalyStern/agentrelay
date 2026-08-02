@@ -85,6 +85,18 @@ refuse to checkpoint rather than guess whose work is whose.
    # `git reset --keep`, which refuses rather than discarding uncommitted work.
    ```
 
+8. **Knowledge graph (optional)** — to understand an unfamiliar codebase, or to give
+   the morning a navigable map of what changed:
+   ```bash
+   agentrelay graph                # free AST-only build (no tokens): graph.html + report
+   agentrelay graph --deep         # richer, but uses an LLM (spends tokens)
+   ```
+   This invokes graphify (an external tool). If it isn't installed, AgentRelay says how
+   to add it and does nothing else — it never installs anything for you. Set
+   `graph.after_run: true` in the config to refresh the graph automatically after each
+   unit. Once built, `graphify query "<question>"` answers questions from the graph
+   instead of re-reading files.
+
 ## What NOT to do
 
 - **Do not** edit the tests, disable a validator, or widen the unit's scope to make a

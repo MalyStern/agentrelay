@@ -19,7 +19,8 @@
     "./commands/validate.md",
     "./commands/done.md",
     "./commands/checkpoints.md",
-    "./commands/fits.md"
+    "./commands/fits.md",
+    "./commands/graph.md"
   ],
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json",
